@@ -15,7 +15,8 @@
  * - It slides up and down (the dim fades) over CLOSE_MS, transform and opacity only. A pick applies
  *   at once; closing takes it away from the page at once (no stm-open, isOpen() false, "closed"
  *   posted) and only dialog.close() waits for the slide. Opening again or a cancel (Back) finishes a
- *   pending close at once. prefers-reduced-motion: no slide, closes at once.
+ *   pending close at once. It closes at once, without sliding, when the search field had focus (the
+ *   keyboard is going down) or with prefers-reduced-motion.
  * - Any failure while opening returns false, and the native list opens as before.
  * - Tells the app when it opens and closes (STMobileSheet web message listener, "open" / "closed"),
  *   so the app's floating button can step out of the way. "closed" only ever follows an "open".
@@ -49,7 +50,10 @@
 
   var CSS = [
     '#' + ROOT_ID + '{position:fixed;inset:0;width:100%;height:100%;max-width:none;max-height:none;' +
-      'margin:0;padding:0;border:0;background:transparent;overflow:hidden;color:' + TEXT + ';' +
+      // clip, not just hidden: an overflow:hidden box is still a scroll container, and showModal()
+      // focusing the grab area while the panel starts 100% below scrolled it (the panel then rose
+      // past its place and dropped back, D4).
+      'margin:0;padding:0;border:0;background:transparent;overflow:hidden;overflow:clip;color:' + TEXT + ';' +
       'font-family:' + FONT + ';font-size:var(--mainFontSize, 15px);text-align:left;text-shadow:none;}',
     '#' + ROOT_ID + ':not([open]){display:none;}',
     '#' + ROOT_ID + '::backdrop{background:transparent;}',
@@ -58,7 +62,7 @@
     '#' + ROOT_ID + '.stm-open .stm-dim{opacity:1;}',
     S + '.stm-panel{position:absolute;left:0;right:0;bottom:0;box-sizing:border-box;display:flex;' +
       'flex-direction:column;max-height:75vh;max-height:75dvh;background:' + BG + ';' +
-      'border-top:1px solid ' + BORDER + ';border-radius:18px 18px 0 0;overflow:hidden;' +
+      'border-top:1px solid ' + BORDER + ';border-radius:18px 18px 0 0;overflow:hidden;overflow:clip;' +
       'padding:8px 0 max(8px, env(safe-area-inset-bottom));transform:translateY(100%);' +
       'transition:transform .2s ease-out;}',
     '#' + ROOT_ID + '.stm-open .stm-panel{transform:none;}',
@@ -129,6 +133,7 @@
   var announced = false; // the app was told "open" and not yet "closed"
   var dragStart = null, dragDy = 0;
   var closeTimer = null; // a closed sheet still sliding down; dialog.close() is pending
+  var focusAtDown = null; // what had focus when the current tap went down
 
   function injectCss() {
     if (document.getElementById(CSS_ID)) return;
@@ -160,7 +165,11 @@
       .forEach(function (type) {
         dlg.addEventListener(type, function (e) { e.stopPropagation(); });
       });
-    dlg.addEventListener('pointerdown', function () { armed = true; }, true);
+    dlg.addEventListener('pointerdown', function () {
+      armed = true;
+      // A tap can move focus off the search field before its click closes the sheet.
+      focusAtDown = document.activeElement;
+    }, true);
     dlg.addEventListener('click', onClick);
     // Back: closes an open sheet (sliding), or finishes one already sliding down, so it's not lost.
     dlg.addEventListener('cancel', function (e) {
@@ -277,6 +286,8 @@
 
   function fill(el, e) {
     el.style.top = e.top + 'px';
+    // Exactly its slot: taller fallback glyphs (emoji, CJK) must not spill onto the next entry.
+    el.style.height = heights[e.kind] + 'px';
     if (e.kind === 'divider') return;
     if (el.__stmItem !== e.item) {
       el.__stmItem = e.item;
@@ -359,6 +370,7 @@
       }
       current = select;
       armed = false;
+      focusAtDown = null;
       openedAt = Date.now();
       // Like a native pick, focus ends up on the select (the dialog restores it on close).
       select.focus({ preventScroll: true });
@@ -367,6 +379,9 @@
       observer.observe(select, { childList: true, subtree: true, attributes: true });
       root.classList.add('stm-open');
       root.showModal();
+      // Where overflow:clip is unsupported, undo the scroll that focusing the grab area did.
+      root.scrollTop = 0;
+      panel.scrollTop = 0;
       clearRendered();
       heights = measure();
       buildEntries('');
@@ -413,8 +428,11 @@
     if (!root) return;
     root.classList.remove('stm-open');
     if (search) search.value = '';
+    var keyboardUp = document.activeElement === search || focusAtDown === search;
+    focusAtDown = null;
     if (!root.open) return;
-    if (reducedMotion()) finishClose();
+    // No slide while the keyboard goes down (the search field had it up), or with reduced motion.
+    if (keyboardUp || reducedMotion()) finishClose();
     else if (closeTimer === null) closeTimer = setTimeout(finishClose, CLOSE_MS);
   }
 

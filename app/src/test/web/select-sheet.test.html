@@ -336,6 +336,30 @@
       ok(sheet(), 'still open');
       eq(hiding.value, 'a', 'value');
     },
+    sheetRisesWithoutOvershoot: function () {
+      // D4: the panel must rise straight to its place. Step its open transition frame by frame
+      // (seeking the CSS transition, so the result doesn't depend on timers) and watch it.
+      source.value = 'claude';
+      down(source);
+      var root = dialog(), panel = q('.stm-panel'), list = q('.stm-list');
+      var anims = panel.getAnimations();
+      ok(anims.length > 0, 'the panel slides in');
+      anims.forEach(function (a) { a.pause(); });
+      var samples = [];
+      for (var t = 0; t <= 220; t += 10) {
+        anims.forEach(function (a) { a.currentTime = t; });
+        samples.push({ t: t, top: panel.getBoundingClientRect().top, root: root.scrollTop, panel: panel.scrollTop });
+      }
+      anims.forEach(function (a) { a.finish(); });
+      var finalTop = panel.getBoundingClientRect().top;
+      samples.forEach(function (x, i) {
+        eq([x.root, x.panel], [0, 0], 'root and panel never scrolled (t=' + x.t + ')');
+        ok(x.top >= finalTop - 0.5, 'never above its final top at t=' + x.t + ': ' + x.top + ' < ' + finalTop);
+        if (i > 0) ok(x.top <= samples[i - 1].top + 0.5, 'only rises at t=' + x.t);
+      });
+      eq([root.scrollTop, panel.scrollTop], [0, 0], 'not scrolled once open');
+      ok(list.scrollTop > 0, 'the list itself still scrolls to the current row');
+    },
     pickAppliesBeforeTheSlideEnds: function () {
       source.value = 'openai';
       down(source);
@@ -372,6 +396,45 @@
       dialog().dispatchEvent(new Event('cancel', { cancelable: true }));
       ok(!sheet(), 'closed for the page');
       ok(dialog().open, 'sliding down');
+    },
+    closesAtOnceWhileTheKeyboardIsUp: function () {
+      // R3: the search field had focus (keyboard up): no slide while the keyboard goes down.
+      down(source);
+      var search = q('.stm-search');
+      search.focus();
+      search.value = 'co';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      tap(rowByText('Cohere'));
+      eq(source.value, 'cohere', 'picked');
+      ok(!dialog().open, 'row tap after searching: closed at once');
+      down(source);
+      q('.stm-search').focus();
+      // A real tap on the dim moves focus away at pointerdown, before the click closes the sheet.
+      q('.stm-dim').dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+      q('.stm-search').blur();
+      q('.stm-dim').click();
+      ok(!dialog().open, 'dim tap after searching: closed at once');
+      down(source);
+      tap(q('.stm-dim'));
+      ok(dialog().open, 'without the keyboard it still slides');
+    },
+    rowsHaveTheirSlotHeight: function () {
+      // R5: a row is exactly its slot, whatever its glyphs (emoji or CJK fallbacks can be taller).
+      var o = document.createElement('option');
+      o.textContent = '\ud83d\ude00\u6f22\u5b57 tall glyphs';
+      named.appendChild(o);
+      try {
+        down(named);
+        var rows = Array.prototype.slice.call(document.querySelectorAll('#stm-select-sheet .stm-row'));
+        var h = rows[0].getBoundingClientRect().height;
+        rows.forEach(function (r) {
+          ok(r.style.height !== '', 'explicit height on ' + r.textContent);
+          eq(Math.round(r.getBoundingClientRect().height * 10), Math.round(h * 10), 'height of ' + r.textContent);
+        });
+      } finally {
+        window.__stmSelectSheet.close();
+        named.removeChild(o);
+      }
     },
     reducedMotionClosesAtOnce: function () {
       var real = window.matchMedia;
