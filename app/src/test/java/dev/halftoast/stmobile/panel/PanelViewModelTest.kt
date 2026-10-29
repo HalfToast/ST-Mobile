@@ -1,0 +1,226 @@
+package dev.halftoast.stmobile.panel
+
+import dev.halftoast.stmobile.ssh.ExecResult
+import dev.halftoast.stmobile.ssh.RemoteShell
+import dev.halftoast.stmobile.ssh.SshError
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import org.junit.After
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+
+private const val DASHBOARD_CMD = "ST_USER='default-user' bash -s"
+private const val WHITELIST_CMD = "bash -s # whitelist"
+
+private const val ONLINE = "online=1\npid=9824\netime=01:34:17\nhttp_code=200\nlatency_s=0.004\nbranch=staging\ncommit=ad29cbda6\nbehind=0\n"
+private const val OFFLINE = "online=0\nbranch=staging\ncommit=ad29cbda6\nbehind=0\n"
+
+/** Records every exec; answers dashboard/whitelist probes and stpanel subcommands with canned output. */
+class FakeRemoteShell : RemoteShell {
+    val commands = mutableListOf<String>()
+    private val calls = mutableListOf<Triple<String, String?, Long>>()
+    var delayMs = 0L
+    var dashboardCalls = 0
+        private set
+    /** Dashboard outputs to return in order; the last one repeats. */
+    var dashboards = mutableListOf(ONLINE)
+    var updateOutput = "Updating ad29cbda6..1234567890ab\nFast-forward\n"
+    private var failure: Exception? = null
+
+    fun failWith(e: Exception?) { failure = e }
+    fun stdinFor(prefix: String): String? = calls.firstOrNull { it.first.contains(prefix) }?.second
+    fun timeoutFor(prefix: String): Long? = calls.firstOrNull { it.first.contains(prefix) }?.third
+
+    override suspend fun exec(command: String, stdin: String?, timeoutMs: Long): ExecResult {
+        commands += command
+        calls += Triple(command, stdin, timeoutMs)
+        if (command == DASHBOARD_CMD) dashboardCalls++
+        if (delayMs > 0) delay(delayMs)
+        failure?.let { throw it }
+        val out = when {
+            command == DASHBOARD_CMD -> if (dashboards.size > 1) dashboards.removeAt(0) else dashboards[0]
+            command == WHITELIST_CMD -> "mode=false\nentry=127.0.0.1\n"
+            command == "stpanel update" -> updateOutput
+            command == "stpanel backup" -> "✓ Backup successfully created!\n  Archive Size: 12M\n"
+            command == "stpanel clean" -> "✓ Cache successfully cleared!\n"
+            command == "stpanel whitelist" && stdin?.startsWith("2\n") == true ->
+                "✓ Added ${stdin.lines()[1]} to whitelist!\n(Note: Restart SillyTavern for config changes to take effect)\n"
+            command == "stpanel whitelist" && stdin == "1\n" ->
+                "✓ Whitelist Mode toggled to: ENABLED\n(Note: Restart SillyTavern for config changes to take effect)\n"
+            else -> ""
+        }
+        return ExecResult(0, out, "")
+    }
+
+    override fun stream(command: String): Flow<String> = emptyFlow()
+}
+
+class FakeProbes : ProbeSource {
+    var invalidUserDir = false
+    override fun dashboard(): Pair<String, String> {
+        require(!invalidUserDir) { "Invalid SillyTavern user folder" }
+        return DASHBOARD_CMD to "# dashboard.sh"
+    }
+    override fun whitelist(): Pair<String, String> = WHITELIST_CMD to "# whitelist.sh"
+}
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class PanelViewModelTest {
+    private lateinit var shell: FakeRemoteShell
+    private lateinit var probes: FakeProbes
+    private lateinit var vm: PanelViewModel
+    private var updatedCalls = 0
+    private var restartedCalls = 0
+
+    @Before fun setUp() {
+        Dispatchers.setMain(StandardTestDispatcher())
+        shell = FakeRemoteShell()
+        probes = FakeProbes()
+        vm = PanelViewModel(shell, probes, onUpdated = { updatedCalls++ }, onServerRestarted = { restartedCalls++ })
+    }
+
+    @After fun tearDown() = Dispatchers.resetMain()
+
+    // --- From the brief, verbatim ---
+
+    @Test fun stopNeedsConfirm() = runTest { vm.request(PanelAction.Stop); assertEquals(PanelAction.Stop, vm.ui.value.pendingConfirm); assertTrue(shell.commands.none { it.contains("stpanel stop") }) }
+    @Test fun startRunsWithoutConfirm() = runTest { vm.request(PanelAction.Start); advanceUntilIdle(); assertTrue(shell.commands.any { it.contains("stpanel start") }) }
+    @Test fun cleanFeedsYes() = runTest { vm.request(PanelAction.CleanCache); vm.confirm(); advanceUntilIdle(); assertEquals("y\n", shell.stdinFor("stpanel clean")) }
+    @Test fun whitelistAddFeedsChoiceAndIp() = runTest { vm.addWhitelistEntry("192.168.1.50"); advanceUntilIdle(); assertEquals("2\n192.168.1.50\n", shell.stdinFor("stpanel whitelist")); assertTrue(vm.ui.value.restartSuggested) }
+    @Test fun whitelistRejectsBadIpWithoutRunning() = runTest { vm.addWhitelistEntry("1.2.3.4\"); x"); advanceUntilIdle(); assertTrue(shell.commands.none { it.contains("whitelist") && it.contains("stpanel") }); assertNotNull(vm.ui.value.error) }
+    @Test fun updateClearsCacheOnSuccess() = runTest { vm.request(PanelAction.Update); vm.confirm(); advanceUntilIdle(); assertEquals(1, updatedCalls); assertTrue(vm.ui.value.restartSuggested) }
+    @Test fun shellFailureShowsErrorAndReenablesActions() = runTest { shell.failWith(SshError.Unreachable("no route")); vm.request(PanelAction.Backup); advanceUntilIdle(); assertNull(vm.ui.value.busy); assertNotNull(vm.ui.value.error) }
+    @Test fun secondActionIgnoredWhileBusy() = runTest { shell.delayMs = 1_000; vm.request(PanelAction.Backup); vm.request(PanelAction.Restart); advanceUntilIdle(); assertEquals(1, shell.commands.count { it.contains("stpanel") }) }
+    @Test fun pollsOnlyWhileVisible() = runTest { vm.setVisible(true); advanceTimeBy(11_000); val n = shell.dashboardCalls; vm.setVisible(false); advanceTimeBy(20_000); assertEquals(n, shell.dashboardCalls); assertTrue(n in 2..3) }
+
+    // --- Rulings and extra coverage ---
+
+    @Test fun confirmActionsWaitForConfirm() = runTest {
+        for (a in listOf(PanelAction.Stop, PanelAction.CleanCache, PanelAction.Update)) {
+            vm.request(a); assertEquals(a, vm.ui.value.pendingConfirm); vm.dismiss(); assertNull(vm.ui.value.pendingConfirm)
+        }
+        advanceUntilIdle()
+        assertTrue(shell.commands.none { it.contains("stpanel") })
+    }
+
+    @Test fun actionSetsBusyThenResultAndRefreshesDashboard() = runTest {
+        vm.request(PanelAction.Backup)
+        assertEquals(PanelAction.Backup, vm.ui.value.busy)
+        advanceUntilIdle()
+        assertNull(vm.ui.value.busy)
+        assertEquals(ActionResult.Ok("Backup created, 12M"), vm.ui.value.lastResult)
+        assertEquals(listOf("stpanel backup", DASHBOARD_CMD), shell.commands)
+        assertEquals(9824, vm.ui.value.dashboard?.pid)
+    }
+
+    @Test fun timeoutsAre300sForUpdateAndBackupElse60s() = runTest {
+        vm.request(PanelAction.Backup); advanceUntilIdle()
+        vm.request(PanelAction.Update); vm.confirm(); advanceUntilIdle()
+        vm.request(PanelAction.Restart); advanceUntilIdle()
+        vm.request(PanelAction.CleanCache); vm.confirm(); advanceUntilIdle()
+        assertEquals(300_000L, shell.timeoutFor("stpanel backup"))
+        assertEquals(300_000L, shell.timeoutFor("stpanel update"))
+        assertEquals(60_000L, shell.timeoutFor("stpanel restart"))
+        assertEquals(60_000L, shell.timeoutFor("stpanel clean"))
+    }
+
+    @Test fun updateAlreadyUpToDateNeitherRevalidatesNorSuggestsRestart() = runTest {
+        shell.updateOutput = "Already up to date.\n"
+        vm.request(PanelAction.Update); vm.confirm(); advanceUntilIdle()
+        assertEquals(0, updatedCalls)
+        assertFalse(vm.ui.value.restartSuggested)
+        assertEquals(ActionResult.Ok("Already up to date"), vm.ui.value.lastResult)
+    }
+
+    @Test fun whitelistToggleFeedsOneAndSuggestsRestart() = runTest {
+        vm.toggleWhitelist(); advanceUntilIdle()
+        assertEquals("1\n", shell.stdinFor("stpanel whitelist"))
+        assertTrue(vm.ui.value.restartSuggested)
+        assertNotNull(vm.ui.value.whitelist)
+    }
+
+    @Test fun restartClearsRestartSuggestion() = runTest {
+        vm.toggleWhitelist(); advanceUntilIdle()
+        vm.request(PanelAction.Restart); advanceUntilIdle()
+        assertFalse(vm.ui.value.restartSuggested)
+    }
+
+    @Test fun restartReloadsChatOnceWhenDashboardShowsOnline() = runTest {
+        shell.dashboards = mutableListOf(OFFLINE, OFFLINE, ONLINE)
+        vm.request(PanelAction.Restart)
+        advanceUntilIdle()
+        assertEquals(1, restartedCalls)
+        assertTrue(shell.dashboardCalls >= 3)
+        // Later polls showing online don't reload again.
+        vm.setVisible(true); advanceTimeBy(11_000); vm.setVisible(false)
+        assertEquals(1, restartedCalls)
+    }
+
+    @Test fun restartWaitsForServerBeforeReloadingChat() = runTest {
+        shell.dashboards = mutableListOf(OFFLINE)
+        vm.request(PanelAction.Start)
+        advanceUntilIdle()
+        assertEquals(0, restartedCalls)
+    }
+
+    @Test fun stopAndBackupDontReloadChat() = runTest {
+        vm.request(PanelAction.Stop); vm.confirm(); advanceUntilIdle()
+        vm.request(PanelAction.Backup); advanceUntilIdle()
+        assertEquals(0, restartedCalls)
+    }
+
+    @Test fun invalidUserDirShowsErrorInsteadOfCrashing() = runTest {
+        probes.invalidUserDir = true
+        vm.refresh(); advanceUntilIdle()
+        assertNotNull(vm.ui.value.error)
+        assertTrue(shell.commands.isEmpty())
+    }
+
+    @Test fun hostKeyChangedIsFlagged() = runTest {
+        shell.failWith(SshError.HostKeyChanged("SHA256:old", "SHA256:new"))
+        vm.refresh(); advanceUntilIdle()
+        assertTrue(vm.ui.value.hostKeyChanged)
+        assertNotNull(vm.ui.value.error)
+    }
+
+    @Test fun successfulRefreshClearsError() = runTest {
+        shell.failWith(SshError.Unreachable("no route"))
+        vm.refresh(); advanceUntilIdle()
+        assertNotNull(vm.ui.value.error)
+        shell.failWith(null)
+        vm.refresh(); advanceUntilIdle()
+        assertNull(vm.ui.value.error)
+        assertTrue(vm.ui.value.dashboard!!.online)
+    }
+
+    @Test fun actionSurvivesHidingThePanel() = runTest {
+        shell.delayMs = 1_000
+        vm.setVisible(true)
+        vm.request(PanelAction.Backup)
+        vm.setVisible(false)
+        advanceUntilIdle()
+        assertEquals(ActionResult.Ok("Backup created, 12M"), vm.ui.value.lastResult)
+    }
+
+    @Test fun whitelistBlocksActionsWhileRunning() = runTest {
+        shell.delayMs = 1_000
+        vm.addWhitelistEntry("10.0.0.1")
+        vm.request(PanelAction.Restart)
+        advanceUntilIdle()
+        assertTrue(shell.commands.none { it == "stpanel restart" })
+    }
+}

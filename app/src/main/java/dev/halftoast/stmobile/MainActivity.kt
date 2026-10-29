@@ -39,7 +39,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.activity.viewModels
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import java.lang.ref.WeakReference
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import dev.halftoast.stmobile.chat.BackAction
@@ -49,6 +53,9 @@ import dev.halftoast.stmobile.chat.ChatState
 import dev.halftoast.stmobile.chat.Snapshot
 import dev.halftoast.stmobile.chat.WebViewHolder
 import dev.halftoast.stmobile.keepalive.KeepAliveService
+import dev.halftoast.stmobile.panel.AndroidProbeSource
+import dev.halftoast.stmobile.panel.PanelScreen
+import dev.halftoast.stmobile.panel.PanelViewModel
 import dev.halftoast.stmobile.settings.SettingsScreen
 import dev.halftoast.stmobile.settings.SetupScreen
 
@@ -68,11 +75,30 @@ class MainActivity : ComponentActivity() {
     private var chatTabShown = true
     private var lastUnconsumedBackAtMs: Long? = null
 
+    /**
+     * Activity-scoped so actions outlive tab switches. It can outlive this Activity instance, so its
+     * callbacks reach the current WebViewHolder through [currentHolder] instead of capturing [holder].
+     */
+    private val panelVm: PanelViewModel by viewModels {
+        val app = application as StMobileApp
+        viewModelFactory {
+            initializer {
+                PanelViewModel(
+                    shell = app.remoteShell,
+                    probes = AndroidProbeSource(app, app.settings),
+                    onUpdated = { currentHolder.get()?.revalidate() },
+                    onServerRestarted = { currentHolder.get()?.reload() },
+                )
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val app = application as StMobileApp
         val settings = app.settings
         holder = WebViewHolder(this, settings)
+        currentHolder = WeakReference(holder)
         if (settings.keepAliveEnabled) KeepAliveService.start(this) else KeepAliveService.stop(this)
         lifecycleScope.launch {
             holder.state.collect { if (it == ChatState.LoginRequired) Snapshot.clear(applicationContext) }
@@ -187,7 +213,11 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                 )
-                                Placeholder(selected)
+                                PanelScreen(
+                                    vm = panelVm,
+                                    onOpenSettings = { overlay = Overlay.Settings },
+                                    onOpenLogs = { selected = Tab.Logs },
+                                )
                             }
                             else -> Box(content) { Placeholder(selected) }
                         }
@@ -209,6 +239,11 @@ class MainActivity : ComponentActivity() {
             Snapshot.save(this, holder.webView)
         }
         super.onStop()
+    }
+
+    companion object {
+        /** The live Activity's holder, for [panelVm]'s callbacks. Weak: never keeps an Activity alive. */
+        private var currentHolder = WeakReference<WebViewHolder>(null)
     }
 
     private fun handleChatBack() {
