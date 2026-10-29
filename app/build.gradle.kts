@@ -15,6 +15,36 @@ android {
         versionName = "0.1.0"
     }
 
+    // Release signing keys live in ~/.gradle/gradle.properties (never in the repo). Without them the
+    // release build still configures and produces an unsigned APK.
+    val storeFile = providers.gradleProperty("STMOBILE_STORE_FILE").orNull
+    val storePassword = providers.gradleProperty("STMOBILE_STORE_PASSWORD").orNull
+    val keyAliasProp = providers.gradleProperty("STMOBILE_KEY_ALIAS").orNull
+    val keyPasswordProp = providers.gradleProperty("STMOBILE_KEY_PASSWORD").orNull
+    val releaseSigningReady = listOf(storeFile, storePassword, keyAliasProp, keyPasswordProp).all { !it.isNullOrBlank() } &&
+        file(storeFile!!).exists()
+
+    signingConfigs {
+        if (releaseSigningReady) {
+            create("release") {
+                this.storeFile = file(storeFile!!)
+                this.storePassword = storePassword
+                this.keyAlias = keyAliasProp
+                this.keyPassword = keyPasswordProp
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (releaseSigningReady) {
+                signingConfig = signingConfigs.getByName("release")
+            } else {
+                logger.warn("WARNING: STMOBILE_* signing properties missing or keystore not found; the release APK will be unsigned.")
+            }
+        }
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true

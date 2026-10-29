@@ -58,6 +58,10 @@ import dev.halftoast.stmobile.panel.PanelScreen
 import dev.halftoast.stmobile.panel.PanelViewModel
 import dev.halftoast.stmobile.settings.SettingsScreen
 import dev.halftoast.stmobile.settings.SetupScreen
+import dev.halftoast.stmobile.stats.StatsScreen
+import dev.halftoast.stmobile.stats.StatsViewModel
+import dev.halftoast.stmobile.logs.LogsScreen
+import dev.halftoast.stmobile.panel.Probes
 
 enum class Tab(val label: String) {
     Chat("Chat"),
@@ -96,6 +100,15 @@ class MainActivity : ComponentActivity() {
                     },
                     onServerDown = { reason -> currentHolder.get()?.markServerDown(reason) },
                 )
+            }
+        }
+    }
+
+    private val statsVm: StatsViewModel by viewModels {
+        val app = application as StMobileApp
+        viewModelFactory {
+            initializer {
+                StatsViewModel(app.remoteShell) { Probes.stats(app, app.settings.stUserDir) }
             }
         }
     }
@@ -230,18 +243,20 @@ class MainActivity : ComponentActivity() {
                                     onOpenLogs = { selected = Tab.Logs },
                                 )
                             }
-                            else -> Box(content) { Placeholder(selected) }
+                            selected == Tab.Stats -> StatsScreen(
+                                vm = statsVm,
+                                onOpenSettings = { overlay = Overlay.Settings },
+                                modifier = content,
+                            )
+                            else -> LogsScreen(
+                                shell = app.remoteShell,
+                                onOpenSettings = { overlay = Overlay.Settings },
+                                modifier = content,
+                            )
                         }
                     }
                 }
             }
-        }
-    }
-
-    @Composable
-    private fun Placeholder(tab: Tab) {
-        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text("${tab.label} (placeholder)")
         }
     }
 
