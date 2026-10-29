@@ -6,6 +6,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -31,28 +32,45 @@ class AvatarCache<T : Any>(private val maxEntries: Int, private val fetch: suspe
     private val inFlight = HashMap<String, CompletableDeferred<T?>>()
 
     suspend fun get(file: String): T? {
-        val mine = CompletableDeferred<T?>()
-        val other = mutex.withLock {
-            entries[file]?.let { return it }
-            inFlight[file] ?: run { inFlight[file] = mine; null }
+        while (true) {
+            val mine = CompletableDeferred<T?>()
+            val other = mutex.withLock {
+                entries[file]?.let { return it }
+                inFlight[file] ?: run { inFlight[file] = mine; null }
+            }
+            if (other == null) return fetchAndPublish(file, mine)
+            try {
+                return other.await()
+            } catch (e: FetchAbandoned) {
+                // The caller doing the fetch was cancelled; nothing failed, so try again ourselves.
+            }
         }
-        if (other != null) return other.await()
+    }
+
+    private suspend fun fetchAndPublish(file: String, mine: CompletableDeferred<T?>): T? {
         var result: T? = null
+        var finished = false
         try {
             result = fetch(file)
+            finished = true
             return result
         } finally {
-            mutex.withLock {
-                inFlight.remove(file)
-                if (result != null) {
-                    entries[file] = result
-                    while (entries.size > maxEntries) entries.remove(entries.keys.first())
+            // Must run even when cancelled, or the key stays in flight forever.
+            withContext(NonCancellable) {
+                mutex.withLock {
+                    inFlight.remove(file)
+                    if (result != null) {
+                        entries[file] = result
+                        while (entries.size > maxEntries) entries.remove(entries.keys.first())
+                    }
                 }
+                if (finished) mine.complete(result) else mine.completeExceptionally(FetchAbandoned())
             }
-            mine.complete(result)
         }
     }
 }
+
+private class FetchAbandoned : RuntimeException()
 
 /** Fetches an avatar with the WebView's ST session cookie. Any failure is null; nothing is logged (private data). */
 fun httpAvatarFetch(serverUrl: () -> String): suspend (String) -> ImageBitmap? = { file ->
