@@ -1,0 +1,9 @@
+<resources>
+    <!-- API 31+ plays the animated pulse; older versions show the static logo (values/themes.xml). -->
+    <style name="Theme.StMobile.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">#18181B</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_pulse</item>
+        <item name="windowSplashScreenAnimationDuration">1000</item>
+        <item name="postSplashScreenTheme">@style/Theme.StMobile</item>
+    </style>
+</resources>
