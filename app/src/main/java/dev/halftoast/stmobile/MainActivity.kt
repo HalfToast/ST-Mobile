@@ -39,6 +39,7 @@ import dev.halftoast.stmobile.chat.ChatScreen
 import dev.halftoast.stmobile.chat.ChatState
 import dev.halftoast.stmobile.chat.Snapshot
 import dev.halftoast.stmobile.chat.WebViewHolder
+import dev.halftoast.stmobile.keepalive.KeepAliveService
 import dev.halftoast.stmobile.settings.AppSettings
 
 enum class Tab(val label: String) {
@@ -57,6 +58,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val settings = AppSettings(getSharedPreferences("settings", Context.MODE_PRIVATE))
         holder = WebViewHolder(this, settings)
+        if (settings.keepAliveEnabled) KeepAliveService.start(this) else KeepAliveService.stop(this)
         lifecycleScope.launch {
             holder.state.collect { if (it == ChatState.LoginRequired) Snapshot.clear(applicationContext) }
         }
