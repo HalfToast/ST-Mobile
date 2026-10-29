@@ -1,11 +1,17 @@
 package dev.halftoast.stmobile.nav
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -26,6 +32,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
@@ -42,7 +50,9 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import dev.halftoast.stmobile.Screen
+import dev.halftoast.stmobile.ui.AnimMs
 import dev.halftoast.stmobile.ui.LocalStPalette
+import dev.halftoast.stmobile.ui.stPressIndication
 import kotlin.math.roundToInt
 
 private val ButtonSize = 40.dp
@@ -79,6 +89,10 @@ fun FloatingNav(
     debugLongPress: (() -> Unit)?,
 ) {
     var open by remember { mutableStateOf(false) }
+    // The fan exists while open and while it collapses; [fan] runs 0 (inside the button) to 1 (out).
+    var fanComposed by remember { mutableStateOf(false) }
+    val fan = remember { Animatable(0f) }
+    val press = remember { MutableInteractionSource() }
     var drag by remember { mutableStateOf(Offset.Zero) }
     var dragging by remember { mutableStateOf(false) }
     val palette = LocalStPalette.current
@@ -91,9 +105,25 @@ fun FloatingNav(
     // Back closes an open fan first.
     BackHandler(enabled = open) { open = false }
 
-    // The keyboard or a sheet appeared: close the fan at once.
+    LaunchedEffect(open) {
+        if (open) {
+            fanComposed = true
+            fan.animateTo(1f, tween(AnimMs, easing = FastOutSlowInEasing))
+        } else {
+            fan.animateTo(0f, tween(AnimMs, easing = FastOutSlowInEasing))
+            fanComposed = false
+        }
+    }
+
+    // The keyboard or a sheet appeared: close the fan at once, without animating.
     LaunchedEffect(Unit) {
-        snapshotFlow { currentHidden() }.collect { if (it) open = false }
+        snapshotFlow { currentHidden() }.collect {
+            if (it) {
+                open = false
+                fan.snapTo(0f)
+                fanComposed = false
+            }
+        }
     }
 
     /** The button's area: the Chat box inside the system bars, in px. */
@@ -115,20 +145,36 @@ fun FloatingNav(
     if (open) {
         // Transparent scrim: closes the fan, and keeps that tap away from the page underneath.
         Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { open = false } })
+    }
+    if (fanComposed) {
         FanScreens.forEachIndexed { i, screen ->
             RoundButton(
                 fill = Color(palette.box).copy(alpha = 0.92f),
                 border = Color(palette.border),
                 modifier = Modifier
+                    // Each icon travels out of the button to its spot (and back), growing as it goes.
                     .offset {
                         val r = area()
                         val fab = fab(r)
                         val y = fab.fanTop + i * (ButtonSize.toPx() + FanSpacing.toPx())
-                        r.topLeft + IntOffset(fab.fanX.roundToInt(), y.roundToInt())
+                        val t = fan.value
+                        r.topLeft + IntOffset(
+                            (fab.restX + (fab.fanX - fab.restX) * t).roundToInt(),
+                            (fab.restY + (y - fab.restY) * t).roundToInt(),
+                        )
                     }
-                    .clickable {
-                        open = false
-                        onOpen(screen)
+                    .graphicsLayer {
+                        val t = fan.value
+                        alpha = t
+                        scaleX = 0.4f + 0.6f * t
+                        scaleY = 0.4f + 0.6f * t
+                        compositingStrategy = CompositingStrategy.ModulateAlpha
+                    }
+                    .clickable(interactionSource = null, indication = stPressIndication(CircleShape)) {
+                        if (open) {
+                            open = false
+                            onOpen(screen)
+                        }
                     },
             ) {
                 Icon(screen.icon, contentDescription = screen.title, Modifier.size(IconSize), tint = Color(palette.text))
@@ -188,10 +234,16 @@ fun FloatingNav(
             }
             .pointerInput(debugLongPress != null) {
                 detectTapGestures(
+                    onPress = { at ->
+                        val down = PressInteraction.Press(at)
+                        press.emit(down)
+                        press.emit(if (tryAwaitRelease()) PressInteraction.Release(down) else PressInteraction.Cancel(down))
+                    },
                     onLongPress = if (debugLongPress != null) ({ if (!currentHidden()) currentLongPress?.invoke() }) else null,
                     onTap = { if (!currentHidden()) open = !open },
                 )
-            },
+            }
+            .indication(press, stPressIndication(CircleShape)),
     ) {
         Icon(NavIcons.Dots, contentDescription = null, Modifier.size(IconSize), tint = Color(palette.accent).copy(alpha = a))
     }

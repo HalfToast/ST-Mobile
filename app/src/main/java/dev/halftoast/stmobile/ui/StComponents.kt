@@ -1,6 +1,26 @@
 package dev.halftoast.stmobile.ui
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Indication
+import androidx.compose.foundation.IndicationNodeFactory
+import androidx.compose.foundation.interaction.InteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.drawOutline
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.ContentDrawScope
+import androidx.compose.ui.node.DelegatableNode
+import androidx.compose.ui.node.DrawModifierNode
+import androidx.compose.ui.node.invalidateDraw
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -146,13 +166,21 @@ fun StButton(
     val p = LocalStPalette.current
     val fill = if (tone == StTone.Danger) p.danger else p.box
     val edge = if (tone == StTone.Danger) p.dangerBorder else p.border
+    // Inside a dialog's confirm/dismiss row only the first tap counts: the dialog is going away.
+    val guard = LocalDialogGuard.current
     Box(
         modifier
             .alpha(if (enabled) 1f else 0.4f)
             .clip(BoxShape)
             .background(Color(fill))
             .border(BorderStroke(1.dp, Color(edge)), BoxShape)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .clickable(
+                interactionSource = null,
+                indication = stPressIndication(BoxShape),
+                enabled = enabled,
+                role = Role.Button,
+                onClick = { if (guard == null || guard.take()) onClick() },
+            )
             .padding(horizontal = 4.dp, vertical = 7.dp),
         contentAlignment = Alignment.Center,
     ) {
@@ -170,7 +198,28 @@ fun StButton(
     }
 }
 
-/** Modal card in ST style: [title], [content], then [dismiss] and [confirm] buttons on the right. */
+/**
+ * Lets a dialog close once: the first confirm, dismiss or Back counts and later ones are ignored, so a
+ * double tap can't run Stop or Restart twice while the dialog goes away.
+ */
+class DialogGuard {
+    private var used = false
+
+    fun take(): Boolean {
+        if (used) return false
+        used = true
+        return true
+    }
+}
+
+/** The guard of the dialog whose confirm/dismiss row this is; null elsewhere. */
+val LocalDialogGuard = staticCompositionLocalOf<DialogGuard?> { null }
+
+/**
+ * Modal card in ST style: [title], [content], then [dismiss] and [confirm] buttons on the right. It
+ * fades and scales in. [StButton]s in [confirm] and [dismiss] must close the dialog: after the first
+ * of them (or Back) the dialog ignores further taps on them.
+ */
 @Composable
 fun StDialog(
     title: String,
@@ -181,9 +230,18 @@ fun StDialog(
 ) {
     val p = LocalStPalette.current
     val shape = RoundedCornerShape(12.dp)
-    Dialog(onDismissRequest = onDismiss) {
+    val guard = remember { DialogGuard() }
+    val shown = remember { Animatable(0f) }
+    LaunchedEffect(Unit) { shown.animateTo(1f, tween(AnimMs, easing = FastOutSlowInEasing)) }
+    Dialog(onDismissRequest = { if (guard.take()) onDismiss() }) {
         Column(
             Modifier
+                .graphicsLayer {
+                    val t = shown.value
+                    alpha = t
+                    scaleX = 0.92f + 0.08f * t
+                    scaleY = 0.92f + 0.08f * t
+                }
                 .fillMaxWidth()
                 .clip(shape)
                 .background(Color(p.background))
@@ -194,8 +252,10 @@ fun StDialog(
             Text(title, color = Color(p.text), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
             CompositionLocalProvider(LocalContentColor provides Color(p.text)) { content() }
             Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                dismiss?.invoke()
-                confirm()
+                CompositionLocalProvider(LocalDialogGuard provides guard) {
+                    dismiss?.invoke()
+                    confirm()
+                }
             }
         }
     }
@@ -243,7 +303,12 @@ fun StSegmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
                 Modifier
                     .weight(1f)
                     .background(if (on) Color(p.box) else Color.Transparent)
-                    .clickable(role = Role.Tab, onClick = { onSelect(i) })
+                    .clickable(
+                        interactionSource = null,
+                        indication = stPressIndication(RectangleShape),
+                        role = Role.Tab,
+                        onClick = { onSelect(i) },
+                    )
                     .padding(vertical = 7.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -255,5 +320,70 @@ fun StSegmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
                 )
             }
         }
+    }
+}
+
+/** Length of the app's short UI animations (Compose scales it with the system animation setting). */
+const val AnimMs = 200
+
+private const val PressAlpha = 0.12f
+private const val PressInMs = 90
+private const val PressOutMs = 220
+
+/**
+ * ST's soft press feedback for its buttons: a faint wash of the text colour inside [shape], fading in
+ * on press and out on release (a quick tap still shows it fully). Drawn over the button only.
+ */
+@Composable
+fun stPressIndication(shape: Shape): Indication {
+    val color = Color(LocalStPalette.current.text)
+    return remember(shape, color) { StPressIndication(shape, color) }
+}
+
+private class StPressIndication(private val shape: Shape, private val color: Color) : IndicationNodeFactory {
+    override fun create(interactionSource: InteractionSource): DelegatableNode =
+        StPressNode(interactionSource, shape, color)
+
+    override fun equals(other: Any?) = other is StPressIndication && other.shape == shape && other.color == color
+
+    override fun hashCode() = 31 * shape.hashCode() + color.hashCode()
+}
+
+private class StPressNode(
+    private val source: InteractionSource,
+    private val shape: Shape,
+    private val color: Color,
+) : Modifier.Node(), DrawModifierNode {
+    private val level = Animatable(0f)
+
+    override fun onAttach() {
+        coroutineScope.launch {
+            val presses = mutableListOf<PressInteraction.Press>()
+            var pressIn: Job? = null
+            source.interactions.collect { interaction ->
+                when (interaction) {
+                    is PressInteraction.Press -> {
+                        presses += interaction
+                        pressIn = launch { level.animateTo(1f, tween(PressInMs)) { invalidateDraw() } }
+                    }
+                    is PressInteraction.Release -> presses -= interaction.press
+                    is PressInteraction.Cancel -> presses -= interaction.press
+                    else -> return@collect
+                }
+                if (presses.isEmpty()) {
+                    val shown = pressIn
+                    launch {
+                        shown?.join()
+                        if (presses.isEmpty()) level.animateTo(0f, tween(PressOutMs)) { invalidateDraw() }
+                    }
+                }
+            }
+        }
+    }
+
+    override fun ContentDrawScope.draw() {
+        drawContent()
+        val t = level.value
+        if (t > 0f) drawOutline(shape.createOutline(size, layoutDirection, this), color.copy(alpha = color.alpha * PressAlpha * t))
     }
 }
