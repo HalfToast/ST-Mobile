@@ -35,8 +35,8 @@ screens, and on the Control Center a Settings gear.
 The native screens use SillyTavern's own theme colors. The app reads them from SillyTavern when the chat
 loads. If you change the theme in SillyTavern, the native screens follow after the next chat load. While
 the server is down, the app uses the colors it remembered last. On a fresh install, before it has read
-anything, it uses the Glimmer theme. Text uses SillyTavern's font (Noto Sans), scaled by SillyTavern's
-font scale. Logs use Noto Sans Mono.
+anything, it uses the Glimmer theme. Text uses the same font as SillyTavern (Noto Sans, bundled in the
+app), scaled by SillyTavern's font scale. Logs use Noto Sans Mono.
 
 SillyTavern's dropdowns open as a themed bottom sheet instead of Android's plain list. The sheet is
 injected into the page on the phone only; nothing changes on the tablet. If it cannot attach, the
@@ -49,8 +49,8 @@ short pulse splash shows first.
 
 1. Turn Tailscale on, on the phone and on the tablet.
 2. Open the app. Chat works right away once the server URL is right.
-3. Open the Control Center (or Stats, Logs) from the floating button. The setup screen asks for the tablet's SSH port (Termux uses 8022) and
-   user name, and your Termux password **once**. The app then creates a key, installs it on the tablet and
+3. Open the Control Center (or Stats, Logs) from the floating button. The setup screen asks for the
+   tablet's SSH port (Termux uses 8022) and user name, and your Termux password **once**. The app then creates a key, installs it on the tablet and
    uses it from then on. The password is not stored.
 4. The first connection pins the tablet's host key. If it ever changes (for example Termux was
    reinstalled), the app says so; use "Trust new host key" in Settings only if you expect that.
