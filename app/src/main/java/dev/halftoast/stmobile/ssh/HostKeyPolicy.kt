@@ -11,12 +11,35 @@ sealed interface HostKeyDecision {
     data object Reject : HostKeyDecision
 }
 
+/** What the tablet presented compared with the pin, for showing to the user before trusting. */
+sealed interface HostKeyCheck {
+    data class Matches(val fingerprint: String) : HostKeyCheck
+    data class Unpinned(val presented: String) : HostKeyCheck
+    data class Changed(val expected: String, val actual: String) : HostKeyCheck
+}
+
 /** Trust on first use. A mismatch is never auto-trusted; the user must clear the pin in Settings. */
 object HostKeyPolicy {
     fun decide(known: String?, presented: String): HostKeyDecision = when {
         known.isNullOrEmpty() -> HostKeyDecision.TrustAndStore
         known == presented -> HostKeyDecision.Accept
         else -> HostKeyDecision.Reject
+    }
+
+    fun check(known: String?, presented: String): HostKeyCheck = when (decide(known, presented)) {
+        HostKeyDecision.TrustAndStore -> HostKeyCheck.Unpinned(presented)
+        HostKeyDecision.Accept -> HostKeyCheck.Matches(presented)
+        HostKeyDecision.Reject -> HostKeyCheck.Changed(known.orEmpty(), presented)
+    }
+
+    /**
+     * The pin to store after the user confirmed [check]: exactly the fingerprint shown to them.
+     * Never null, so re-trusting can't fall back to silently pinning whatever the next connection sees.
+     */
+    fun pinAfterConfirm(check: HostKeyCheck): String = when (check) {
+        is HostKeyCheck.Matches -> check.fingerprint
+        is HostKeyCheck.Unpinned -> check.presented
+        is HostKeyCheck.Changed -> check.actual
     }
 
     /**

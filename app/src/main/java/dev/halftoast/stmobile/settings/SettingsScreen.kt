@@ -10,11 +10,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -30,12 +33,18 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import dev.halftoast.stmobile.ssh.HostKeyCheck
+import dev.halftoast.stmobile.ssh.HostKeyPolicy
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.launch
 import androidx.compose.ui.unit.dp
 import dev.halftoast.stmobile.keepalive.KeepAliveService
 import dev.halftoast.stmobile.ssh.SshRemoteShell
@@ -62,6 +71,10 @@ fun SettingsScreen(
     var messageIsError by remember { mutableStateOf(false) }
     var keepAlive by remember { mutableStateOf(settings.keepAliveEnabled) }
     var pinned by remember { mutableStateOf(settings.knownHostKey) }
+    val scope = rememberCoroutineScope()
+    var checkingKey by remember { mutableStateOf(false) }
+    var keyMessage by remember { mutableStateOf<String?>(null) }
+    var toConfirm by remember { mutableStateOf<HostKeyCheck?>(null) }
 
     val keepAliveNow by rememberUpdatedState(keepAlive)
     DisposableEffect(Unit) {
@@ -107,7 +120,8 @@ fun SettingsScreen(
                 val before = Triple(settings.sshHost, settings.sshPort, settings.sshUser)
                 form.saveSsh(settings)
                 val sshChanged = before != Triple(settings.sshHost, settings.sshPort, settings.sshUser)
-                if (sshChanged) shell.close()
+                // Undispatched + NonCancellable inside close(): the disconnect runs on IO even if we leave now.
+                if (sshChanged) scope.launch(start = CoroutineStart.UNDISPATCHED) { shell.close() }
                 if (form.saveServerUrl(settings)) onServerUrlChanged()
                 pinned = settings.knownHostKey
                 messageIsError = false
@@ -142,8 +156,49 @@ fun SettingsScreen(
                 pinned?.let { "Pinned host key: $it" } ?: "No host key pinned. The next connection will pin it.",
                 style = MaterialTheme.typography.bodySmall,
             )
-            if (pinned != null) {
-                TrustNewHostKeyButton(settings, shell, onCleared = { pinned = null })
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(
+                    enabled = !checkingKey,
+                    onClick = {
+                        checkingKey = true
+                        keyMessage = null
+                        scope.launch {
+                            try {
+                                val check = HostKeyPolicy.check(settings.knownHostKey, shell.presentedHostKey())
+                                if (check is HostKeyCheck.Matches) {
+                                    keyMessage = "The tablet's host key matches the pinned key."
+                                } else {
+                                    toConfirm = check
+                                }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                keyMessage = setupErrorMessage(e, keyStage = false)
+                            } finally {
+                                checkingKey = false
+                            }
+                        }
+                    },
+                ) { Text("Trust new host key") }
+                if (checkingKey) {
+                    Spacer(Modifier.width(16.dp))
+                    CircularProgressIndicator(Modifier.size(24.dp))
+                }
+            }
+            keyMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            toConfirm?.let { check ->
+                TrustHostKeyDialog(
+                    check = check,
+                    onConfirm = {
+                        // Pin exactly the fingerprint shown in the dialog.
+                        settings.knownHostKey = HostKeyPolicy.pinAfterConfirm(check)
+                        pinned = settings.knownHostKey
+                        toConfirm = null
+                        keyMessage = "Pinned."
+                        scope.launch(start = CoroutineStart.UNDISPATCHED) { shell.close() }
+                    },
+                    onDismiss = { toConfirm = null },
+                )
             }
             OutlinedButton(onClick = onRerunSetup) { Text("Re-run setup") }
             Spacer(Modifier.height(24.dp))

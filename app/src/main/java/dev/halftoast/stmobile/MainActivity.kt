@@ -123,6 +123,7 @@ class MainActivity : ComponentActivity() {
                                     if (urlChanged) holder.reload()
                                 },
                                 onCancel = { overlay = Overlay.Settings },
+                                allowTrust = true,
                                 modifier = Modifier.padding(padding).consumeWindowInsets(padding),
                             )
                         }
@@ -173,6 +174,7 @@ class MainActivity : ComponentActivity() {
                                     setupDone = true
                                     if (urlChanged) holder.reload()
                                 },
+                                onOpenSettings = { overlay = Overlay.Settings },
                                 modifier = content,
                             )
                             selected == Tab.Panel -> Column(content) {

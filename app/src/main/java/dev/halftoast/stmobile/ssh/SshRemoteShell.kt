@@ -4,6 +4,8 @@ import dev.halftoast.stmobile.settings.AppSettings
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -48,9 +50,13 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
                 val session = openSession()
                 try {
                     runCommand(session, command, stdin)
+                } catch (e: CancellationException) {
+                    session.terminate() // timed out or cancelled: don't leave the command running
+                    throw e
                 } catch (e: IOException) {
                     // Timed out or cancelled: interrupted reads surface as InterruptedIOException.
                     // Keep the shared connection; withSshTimeout reports the timeout.
+                    if (!currentCoroutineContext().isActive) session.terminate()
                     currentCoroutineContext().ensureActive()
                     // Otherwise the connection died under us; the next call reconnects.
                     discard()
@@ -62,15 +68,15 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
         }
 
     /**
-     * Emits stdout lines of [command] (append `2>&1` to include stderr). Cancelling the collector
-     * signals the remote command and closes the session.
+     * Emits stdout lines of [command] (append `2>&1` to include stderr). When the collector stops
+     * early, TERM is sent to the remote command (also if cancellation lands while exec is still
+     * waiting for its reply) and the session is closed. Termux sshd keeps a non-PTY command running
+     * after a plain channel close, so the signal is what stops e.g. `tail -f`.
      */
     override fun stream(command: String): Flow<String> = channelFlow {
         val session = openSession()
-        var cmd: Session.Command? = null
         try {
             val c = runInterruptible { session.exec(command) }
-            cmd = c
             c.outputStream.close()
             launch { runCatching { runInterruptible { drain(c.errorStream) } } } // keep the window open
             val reader = c.inputStream.bufferedReader(Charsets.UTF_8)
@@ -83,16 +89,32 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
             discard()
             throw SshError.Unreachable("Lost the connection to the tablet", e)
         } finally {
-            cmd?.let { if (it.isOpen && it.exitStatus == null) runCatching { it.signal(Signal.TERM) } }
+            session.terminate()
             session.closeQuietly()
         }
     }.flowOn(Dispatchers.IO)
 
-    /** Drops the cached connection. */
-    fun close() {
-        val old = live
-        live = null
-        old?.client?.closeQuietly()
+    /**
+     * Drops the cached connection. Suspends and runs on IO (sshj's disconnect writes to the socket;
+     * on Main it throws NetworkOnMainThreadException and leaks the socket and the sshd session).
+     * Not cancellable once started, so the disconnect always finishes.
+     */
+    suspend fun close() = withContext(Dispatchers.IO + NonCancellable) {
+        mutex.withLock {
+            val old = live
+            live = null
+            old?.client?.closeQuietly()
+        }
+    }
+
+    /**
+     * The fingerprint the tablet presents right now, without authenticating (nothing is sent but
+     * the key exchange). For showing the user what "Trust new host key" would pin.
+     */
+    suspend fun presentedHostKey(): String = withContext(Dispatchers.IO) {
+        withSshTimeout(15_000) {
+            runInterruptible { SshConnect.fetchHostKey(settings.sshHost, settings.sshPort) }
+        }
     }
 
     private suspend fun runCommand(session: Session, command: String, stdin: String?): ExecResult = coroutineScope {
@@ -198,6 +220,30 @@ internal class PolicyHostKeyVerifier(private val known: String?) : HostKeyVerifi
 internal object SshConnect {
     const val CONNECT_TIMEOUT_MS = 5_000
 
+    /** Key exchange only: records the host key, refuses it so no auth happens, disconnects. Blocking. */
+    fun fetchHostKey(host: String, port: Int): String {
+        var seen: String? = null
+        val client = SSHClient(DefaultConfig())
+        client.connectTimeout = CONNECT_TIMEOUT_MS
+        client.addHostKeyVerifier(object : HostKeyVerifier {
+            override fun verify(hostname: String?, port: Int, key: PublicKey): Boolean {
+                seen = HostKeyPolicy.fingerprint(key)
+                return false
+            }
+
+            override fun findExistingAlgorithms(hostname: String?, port: Int): List<String> = emptyList()
+        })
+        var failure: Exception? = null
+        try {
+            client.connect(host, port)
+        } catch (e: Exception) {
+            failure = e
+        } finally {
+            client.closeQuietly()
+        }
+        return seen ?: throw SshError.Unreachable("Can't reach the tablet", failure)
+    }
+
     /** Connects and verifies the host key (blocking). Throws [SshError.HostKeyChanged] or [SshError.Unreachable]. */
     fun open(host: String, port: Int, knownHostKey: String?): Pair<SSHClient, PolicyHostKeyVerifier> {
         val verifier = PolicyHostKeyVerifier(knownHostKey)
@@ -248,4 +294,13 @@ internal fun SSHClient.closeQuietly() {
 
 internal fun Session.closeQuietly() {
     runCatching { close() }
+}
+
+/**
+ * Sends TERM to the session's command if the channel is open and no exit status arrived yet.
+ * Works before exec's reply too: sshd handles channel requests in order, after starting the command.
+ */
+internal fun Session.terminate() {
+    val cmd = this as? Session.Command ?: return
+    if (cmd.isOpen && cmd.exitStatus == null) runCatching { cmd.signal(Signal.TERM) }
 }

@@ -42,67 +42,17 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import dev.halftoast.stmobile.StMobileApp
 import dev.halftoast.stmobile.keepalive.KeepAliveService
+import dev.halftoast.stmobile.ssh.HostKeyCheck
 import dev.halftoast.stmobile.ssh.HostKeyPolicy
 import dev.halftoast.stmobile.ssh.KeyInstaller
 import dev.halftoast.stmobile.ssh.KeyManager
 import dev.halftoast.stmobile.ssh.SshError
 import dev.halftoast.stmobile.ssh.SshRemoteShell
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-
-/** Editable connection fields shared by Setup and Settings (everything but the password). */
-data class ConnectionForm(
-    val serverUrl: String,
-    val host: String,
-    val port: String,
-    val user: String,
-    val stUserDir: String,
-) {
-    /** First problem with the form, or null if it can be saved. */
-    fun validate(): String? = when {
-        !AppSettings.isValidServerUrl(serverUrl) -> "Server URL must start with http:// or https://"
-        host.isBlank() || host.any { it.isWhitespace() } -> "Enter the tablet's SSH host"
-        port.toIntOrNull()?.let { it in 1..65535 } != true -> "Port must be a number from 1 to 65535"
-        user.isBlank() || user.any { it.isWhitespace() } -> "Enter the SSH user"
-        stUserDir.isBlank() || '/' in stUserDir || stUserDir == "." || stUserDir == ".." ->
-            "ST user folder must be a folder name, like default-user"
-        else -> null
-    }
-
-    /** Saves the SSH fields; a different host or port unpins the old host key (pins are per host). */
-    fun saveSsh(settings: AppSettings) {
-        val newHost = host.trim()
-        val newPort = port.trim().toInt()
-        if (newHost != settings.sshHost || newPort != settings.sshPort) settings.knownHostKey = null
-        settings.sshHost = newHost
-        settings.sshPort = newPort
-        settings.sshUser = user.trim()
-        settings.stUserDir = stUserDir.trim()
-    }
-
-    /** Saves the server URL; returns true if it changed. */
-    fun saveServerUrl(settings: AppSettings): Boolean {
-        val url = serverUrl.trim()
-        if (url == settings.serverUrl) return false
-        settings.serverUrl = url
-        return true
-    }
-
-    companion object {
-        /** Suggested user for a blank field: Termux's user on HalfToast's tablet. Editable. */
-        const val SUGGESTED_SSH_USER = "u0_a123"
-
-        fun from(settings: AppSettings) = ConnectionForm(
-            serverUrl = settings.serverUrl,
-            host = settings.sshHost,
-            port = settings.sshPort.toString(),
-            user = settings.sshUser.ifBlank { SUGGESTED_SSH_USER },
-            stUserDir = settings.stUserDir,
-        )
-    }
-}
 
 /** User-facing text for a failed setup. */
 fun setupErrorMessage(e: Throwable, keyStage: Boolean): String = when (e) {
@@ -129,6 +79,10 @@ fun SetupScreen(
     onComplete: (serverUrlChanged: Boolean) -> Unit,
     modifier: Modifier = Modifier,
     onCancel: (() -> Unit)? = null,
+    /** True only for "Re-run setup" opened from Settings: offers trusting a changed host key there. */
+    allowTrust: Boolean = false,
+    /** First run: a changed host key is resolved in Settings, which this opens. */
+    onOpenSettings: (() -> Unit)? = null,
 ) {
     val activity = LocalActivity.current as? ComponentActivity
     val scope = rememberCoroutineScope()
@@ -137,7 +91,8 @@ fun SetupScreen(
     var password by remember { mutableStateOf("") }
     var busy by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
-    var hostKeyChanged by remember { mutableStateOf(false) }
+    var hostKeyChange by remember { mutableStateOf<HostKeyCheck.Changed?>(null) }
+    var confirmTrust by remember { mutableStateOf(false) }
     var keyProblem by remember { mutableStateOf<String?>(null) }
 
     // Make (or unlock) the app key up front so a Keystore problem shows before the password is typed.
@@ -162,7 +117,7 @@ fun SetupScreen(
         val pw = password.toCharArray()
         password = ""
         error = null
-        hostKeyChanged = false
+        hostKeyChange = null
         busy = true
         val f = form
         scope.launch {
@@ -187,7 +142,7 @@ fun SetupScreen(
             } catch (e: Exception) {
                 Log.w(StMobileApp.LOG_TAG, "ssh: setup failed: ${e.javaClass.simpleName}: ${e.message}")
                 error = setupErrorMessage(e, keyStage)
-                hostKeyChanged = e is SshError.HostKeyChanged
+                hostKeyChange = (e as? SshError.HostKeyChanged)?.let { HostKeyCheck.Changed(it.expected, it.actual) }
                 busy = false
             } finally {
                 pw.fill('\u0000')
@@ -226,7 +181,27 @@ fun SetupScreen(
         )
         keyProblem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
         error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        if (hostKeyChanged) TrustNewHostKeyButton(settings, shell, onCleared = { hostKeyChanged = false; error = null })
+        hostKeyChange?.let { change ->
+            if (allowTrust) {
+                OutlinedButton(onClick = { confirmTrust = true }, enabled = !busy) { Text("Trust new host key") }
+                if (confirmTrust) {
+                    TrustHostKeyDialog(
+                        check = change,
+                        onConfirm = {
+                            settings.knownHostKey = HostKeyPolicy.pinAfterConfirm(change)
+                            confirmTrust = false
+                            hostKeyChange = null
+                            error = null
+                            scope.launch(start = CoroutineStart.UNDISPATCHED) { shell.close() }
+                        },
+                        onDismiss = { confirmTrust = false },
+                    )
+                }
+            } else if (onOpenSettings != null) {
+                Text("You can review and trust the new key in Settings.", style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = onOpenSettings, enabled = !busy) { Text("Open Settings") }
+            }
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Button(onClick = ::connect, enabled = !busy && keyProblem == null) { Text("Connect") }
             if (busy) {
@@ -274,37 +249,37 @@ fun ConnectionFields(form: ConnectionForm, enabled: Boolean, onChange: (Connecti
     OutlinedTextField(
         value = form.stUserDir, onValueChange = { onChange(form.copy(stUserDir = it)) },
         label = { Text("ST user folder") }, singleLine = true, enabled = enabled,
+        isError = !ConnectionForm.isValidStUserDir(form.stUserDir.trim()),
+        supportingText = if (ConnectionForm.isValidStUserDir(form.stUserDir.trim())) null else {
+            { Text(ConnectionForm.ST_USER_DIR_ERROR) }
+        },
         keyboardOptions = noCorrect, modifier = Modifier.fillMaxWidth(),
     )
 }
 
-/** Clears the pinned host key after confirmation, so the next connection pins what the tablet presents. */
+/**
+ * Confirmation before trusting a host key. Shows the exact fingerprint that will be pinned
+ * ([HostKeyPolicy.pinAfterConfirm]); the caller pins that string, never clears the pin.
+ */
 @Composable
-fun TrustNewHostKeyButton(settings: AppSettings, shell: SshRemoteShell, onCleared: () -> Unit) {
-    var confirm by remember { mutableStateOf(false) }
-    OutlinedButton(onClick = { confirm = true }) { Text("Trust new host key") }
-    if (confirm) {
-        AlertDialog(
-            onDismissRequest = { confirm = false },
-            title = { Text("Trust a new host key?") },
-            text = {
-                Text(
-                    "Only do this if you reinstalled Termux or SSH on the tablet or regenerated its host keys. " +
-                        "The next connection will trust whatever key the tablet presents. If you didn't change " +
-                        "anything, someone may be intercepting the connection.",
-                )
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    settings.knownHostKey = null
-                    shell.close()
-                    confirm = false
-                    onCleared()
-                }) { Text("Trust new key") }
-            },
-            dismissButton = { TextButton(onClick = { confirm = false }) { Text("Cancel") } },
-        )
+fun TrustHostKeyDialog(check: HostKeyCheck, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    val body = when (check) {
+        is HostKeyCheck.Changed ->
+            "The tablet now presents a different SSH host key.\n\nPinned: ${check.expected}\nNow: ${check.actual}\n\n" +
+                "Only trust it if you reinstalled Termux or SSH on the tablet or regenerated its host keys. " +
+                "If you didn't change anything, someone may be intercepting the connection."
+        is HostKeyCheck.Unpinned -> "Pin the tablet's host key?\n\n${check.presented}"
+        is HostKeyCheck.Matches -> "The tablet's host key matches the pinned key.\n\n${check.fingerprint}"
     }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (check is HostKeyCheck.Changed) "Trust the new host key?" else "Pin host key?") },
+        text = { Text(body) },
+        confirmButton = {
+            TextButton(onClick = onConfirm) { Text("Trust this key") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
+    )
 }
 
 internal val ConnectionFormSaver = listSaver<ConnectionForm, String>(
