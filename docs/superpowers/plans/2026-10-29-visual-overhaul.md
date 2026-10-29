@@ -471,7 +471,7 @@
     - `opensSheetAndPreventsNative`: `down(source) === true`, `#stm-select-sheet.stm-open` exists, the title is the label text, there are 10 `.stm-row`s and exactly one `.stm-divider`.
     - `marksCurrent`: with `source.value = 'claude'`, after opening, the `.stm-row.stm-selected` text is "Claude".
     - `pickAppliesAndFiresEvents`: tapping the AI21 row → `source.value === 'ai21'`, events `['input', 'change']`, sheet closed.
-    - `searchOnlyOnLongLists`: `.stm-search` present for source (10 options), absent for Yes/No. Typing "clo" leaves 2 rows (Claude, Cloudflare Workers AI). "zzz" shows `.stm-empty`.
+    - `searchOnlyOnLongLists`: `.stm-search` present for source (10 options), absent for Yes/No. Typing "cl" leaves 2 rows (Claude, Cloudflare Workers AI). "zzz" shows `.stm-empty`.
     - `escapeAndDimCloseWithoutChange`: open → Escape → closed, value unchanged, no events. Same with a `.stm-dim` click.
     - `multipleUsesDone`: toggle a and c, click `.stm-done` → selected values `['a', 'c']`, events `['input', 'change']`.
     - `listBoxAndDisabledAreNotIntercepted`: `down(sizeFour) === false`, `down(disabled) === false`, no sheet.
