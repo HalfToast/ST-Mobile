@@ -46,6 +46,11 @@ object Snapshot {
     }
 
     fun clear(context: Context) {
-        file(context).delete()
+        val target = file(context)
+        // Same executor as save, so the delete is ordered after any queued save.
+        io.execute {
+            target.delete()
+            File(target.parentFile, "$FILE_NAME.tmp").delete()
+        }
     }
 }
