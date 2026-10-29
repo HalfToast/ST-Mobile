@@ -1,6 +1,25 @@
 package dev.halftoast.stmobile.chat
 
 import android.widget.FrameLayout
+import androidx.compose.foundation.indication
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.PressInteraction
+import androidx.compose.runtime.remember
+import androidx.compose.ui.input.pointer.PointerEvent
+import androidx.compose.ui.input.pointer.changedToDown
+import androidx.compose.ui.input.pointer.changedToUp
+import androidx.compose.ui.node.LayoutAwareModifierNode
+import androidx.compose.ui.node.ModifierNodeElement
+import androidx.compose.ui.node.PointerInputModifierNode
+import androidx.compose.ui.node.SemanticsModifierNode
+import androidx.compose.ui.node.TouchBoundsExpansion
+import androidx.compose.ui.node.requireDensity
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsPropertyReceiver
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.unit.IntSize
+import dev.halftoast.stmobile.ui.stPressIndication
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -9,7 +28,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -27,7 +45,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -86,11 +103,12 @@ fun ChatScreen(
                 StatusPill("Reconnecting…", pillPlace)
             }
             ChatState.Stalled -> StatusPill("Still loading…", pillPlace) {
+                val press = remember { MutableInteractionSource() }
                 Text(
                     "Retry",
                     Modifier
-                        .clip(RoundedCornerShape(50))
-                        .clickable(onClick = holder::retry)
+                        .compactTap(press, holder::retry)
+                        .indication(press, stPressIndication(RoundedCornerShape(50)))
                         .padding(horizontal = 10.dp, vertical = 2.dp),
                     color = Color(p.accent),
                     style = MaterialTheme.typography.labelLarge,
@@ -150,5 +168,85 @@ private fun Modifier.consumeAllPointerInput(): Modifier = pointerInput(Unit) {
         while (true) {
             awaitPointerEvent(PointerEventPass.Initial).changes.forEach { it.consume() }
         }
+    }
+}
+
+/** The smallest tap target, as Material asks for. */
+private val MinTouch = 48.dp
+
+/**
+ * A tap target that reaches at least [MinTouch] square around a smaller element without growing its
+ * layout (the pill keeps its size): the extra area is a touch-bounds expansion. Emits press
+ * interactions to [interactions] for the highlight, and is a button for accessibility.
+ */
+private fun Modifier.compactTap(interactions: MutableInteractionSource, onClick: () -> Unit): Modifier =
+    this then CompactTapElement(interactions, onClick)
+
+private data class CompactTapElement(
+    val interactions: MutableInteractionSource,
+    val onTap: () -> Unit,
+) : ModifierNodeElement<CompactTapNode>() {
+    override fun create() = CompactTapNode(interactions, onTap)
+
+    override fun update(node: CompactTapNode) {
+        node.interactions = interactions
+        node.onTap = onTap
+    }
+}
+
+private class CompactTapNode(
+    var interactions: MutableInteractionSource,
+    var onTap: () -> Unit,
+) : Modifier.Node(), PointerInputModifierNode, SemanticsModifierNode, LayoutAwareModifierNode {
+    private var size = IntSize.Zero
+    private var press: PressInteraction.Press? = null
+
+    override fun onRemeasured(size: IntSize) {
+        this.size = size
+    }
+
+    override val touchBoundsExpansion: TouchBoundsExpansion
+        get() {
+            val min = with(requireDensity()) { MinTouch.roundToPx() }
+            val dx = ((min - size.width + 1) / 2).coerceAtLeast(0)
+            val dy = ((min - size.height + 1) / 2).coerceAtLeast(0)
+            return TouchBoundsExpansion(dx, dy, dx, dy)
+        }
+
+    override fun onPointerEvent(pointerEvent: PointerEvent, pass: PointerEventPass, bounds: IntSize) {
+        if (pass != PointerEventPass.Main) return
+        val change = pointerEvent.changes.firstOrNull() ?: return
+        when {
+            change.changedToDown() && !change.isConsumed -> {
+                change.consume()
+                endPress(released = false)
+                press = PressInteraction.Press(change.position).also { interactions.tryEmit(it) }
+            }
+            change.changedToUp() && press != null -> {
+                val tapped = !change.isConsumed
+                endPress(released = tapped)
+                if (tapped) {
+                    change.consume()
+                    onTap()
+                }
+            }
+        }
+    }
+
+    override fun onCancelPointerInput() = endPress(released = false)
+
+    override fun onDetach() = endPress(released = false)
+
+    private fun endPress(released: Boolean) {
+        val p = press ?: return
+        press = null
+        interactions.tryEmit(if (released) PressInteraction.Release(p) else PressInteraction.Cancel(p))
+    }
+
+    override val shouldMergeDescendantSemantics get() = true
+
+    override fun SemanticsPropertyReceiver.applySemantics() {
+        role = Role.Button
+        onClick { onTap(); true }
     }
 }
