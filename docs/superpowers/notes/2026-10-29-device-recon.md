@@ -37,3 +37,26 @@ Access URLs: http://127.0.0.1:8000 | Wi-Fi: http://192.168.1.2:8000 | Tailscale:
 Task 4 (asset cache; ST_READY now measured from onPageStarted, so the 13341 above is not like-for-like): PENDING - phone was locked/dozing, so the four numbers (2 cold starts with `debug_disable_asset_cache` on, 2 warm-cache cold starts with it off) were not measured.
 
 Task 4 device check (on-device, c05287a installed): BLOCKED, no timings measured. The app crashes immediately on every cold start (logcat -b crash): `FATAL EXCEPTION: st-version`, `NullPointerException: Attempt to invoke virtual method 'boolean android.os.Handler.post(Runnable)' on a null object reference` at `WebViewHolder.loadUrlTimed$lambda$0(WebViewHolder.kt:168)`. Cause: `loadUrlTimed` is an extension on `WebView`, so the bare `handler` inside the `thread { }` resolves to `View.getHandler()` of the (unattached, hence null) WebView rather than `WebViewHolder.handler`. Fix: use `this@WebViewHolder.handler.post { ... }`. The same pattern is still present at HEAD ec5f1ef. Steps 2-5 (timings, error screens, help link, back-closes-popup) were not run.
+
+## Device check 2 (HEAD da9d972, an Android phone / Android 16, 2026-10-29)
+
+Like-for-like cold-start timings (force-stop, logcat -c, launch, wait for ST_READY; ST_READY measured from onPageStarted). No `settings.xml` existed beforehand, so defaults applied; it was removed again at the end.
+
+| run | cache disabled: VERSION_WAIT / ST_READY (ms) | cache enabled: VERSION_WAIT / ST_READY (ms) |
+|---|---|---|
+| 1 | 1 / 12593 | 483 / 9543 |
+| 2 | 1 / 13657 | 487 / 9262 |
+| 3 | 0 / 12081 | 405 / 9592 |
+| median | 1 / 12593 | 483 / 9543 |
+
+(Enabled runs came after one warm-up cold start: 557 / 9101. Initial cold start with defaults: 732 / 9321.) The asset cache saves about 3.0 s (about 24 %) of ST_READY at the cost of about 0.45 s VERSION_WAIT. Even with the cache, about 9.3 s remain, so the remaining time is not static-asset transfer.
+
+Where the time goes: NOT MEASURED. The debug build does not call `setWebContentsDebuggingEnabled` (grep finds nothing), so no CDP/performance data was available.
+
+Other checks:
+- Crash buffer empty after install and cold starts.
+- Error screens PASS. `/this-does-not-exist` shows "SillyTavern is unreachable / Server refused the connection (404)" with Retry and Open Control Center, no progress bar. `http://100.101.102.103:1` shows the same screen with `net::ERR_UNSAFE_PORT` (Chromium blocks port 1, so this is not a true refused connection). Restoring (no `server_url`) loads ST (ST_READY 9307).
+- Help link PASS. Tapping "?" opened Firefox; `am start` of ST Mobile brought its task back to the front, still on ST. (An earlier tap during page load did nothing.)
+- Back closes ST popup PASS. Opened "Manage chat files" (Chat History popup), which autofocuses its search field, so the first back only hid the IME, the second closed the popup and ST Mobile stayed in front (a third press would show "Press back again to leave" toast, not pressed).
+- Snapshot with keyboard open PASS. After home + `am kill` + relaunch, the overlay showed (previous snapshot, not stretched) with "Reconnecting...", then live page (ST_READY 11102 after relaunch). Keyboard closed: home, kill, relaunch gave the last screen with "Reconnecting..." and live page.
+- Side effect: a stray tap during the help-link check opened the Seraphina recent chat (character "Chise") in ST. Nothing was typed or sent.
