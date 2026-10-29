@@ -9,6 +9,8 @@
  * - ST sees what a native pick gives it: the same selectedIndex / option.selected and one input then
  *   one change event, and nothing at all when the value did not change.
  * - Any failure while opening returns false, and the native list opens as before.
+ * - Tells the app when it opens and closes (STMobileSheet web message listener, "open" / "closed"),
+ *   so the app's floating button can step out of the way. "closed" only ever follows an "open".
  * - Never logs: option text is page data.
  */
 (function () {
@@ -99,6 +101,7 @@
   var observer = null;
   var picked = null;    // multiple: per-option selected state while open
   var armed = false, openedAt = 0;
+  var announced = false; // the app was told "open" and not yet "closed"
   var dragStart = null, dragDy = 0;
 
   function injectCss() {
@@ -251,6 +254,8 @@
       select.focus({ preventScroll: true });
       root.classList.add('stm-open');
       root.showModal();
+      announced = true;
+      tellApp('open');
       var sel = list.querySelector('.stm-selected');
       if (sel) list.scrollTop = sel.offsetTop - (list.clientHeight - sel.offsetHeight) / 2;
       return true;
@@ -265,7 +270,15 @@
     try { close(); } catch (e) { current = null; observer = null; }
   }
 
+  function tellApp(message) {
+    try { STMobileSheet.postMessage(message); } catch (e) { /* no bridge: nothing to tell */ }
+  }
+
   function close() {
+    if (announced) {
+      announced = false;
+      tellApp('closed');
+    }
     if (observer) observer.disconnect();
     observer = null;
     current = null;

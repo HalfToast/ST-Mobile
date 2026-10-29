@@ -61,6 +61,9 @@
   var fixtures = document.getElementById('fixtures');
 
   var events = [];
+  // The app's STMobileSheet web message listener, stubbed: records what the page posts.
+  var posted = [];
+  window.STMobileSheet = { postMessage: function (m) { posted.push(m); } };
   ['input', 'change'].forEach(function (type) {
     document.addEventListener(type, function (e) {
       if (fixtures.contains(e.target)) events.push(e.type);
@@ -76,6 +79,12 @@
   function tap(el) {
     el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
     el.click();
+  }
+  // A one-finger touch on the sheet's grab area (our handlers only read touches[0].clientY).
+  function touch(el, type, y) {
+    var ev = new Event(type, { bubbles: true });
+    ev.touches = y === undefined ? [] : [{ clientY: y }];
+    el.dispatchEvent(ev);
   }
   function sheet() { return document.querySelector('#stm-select-sheet.stm-open'); }
   function q(sel) { return document.querySelector('#stm-select-sheet ' + sel); }
@@ -95,6 +104,46 @@
   function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
   var tests = {
+    bridgeReportsOpenThenEachClose: function () {
+      var closers = {
+        pick: function () { source.value = 'openai'; down(source); tap(rowByText('AI21')); },
+        dim: function () { down(source); tap(q('.stm-dim')); },
+        escape: function () {
+          down(source);
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+        },
+        cancel: function () {
+          down(source);
+          document.getElementById('stm-select-sheet').dispatchEvent(new Event('cancel', { cancelable: true }));
+        },
+        swipe: function () {
+          down(source);
+          var head = q('.stm-head');
+          touch(head, 'touchstart', 100);
+          touch(head, 'touchmove', 300);
+          touch(head, 'touchend');
+        },
+        done: function () { down(letters); tap(q('.stm-done')); },
+      };
+      Object.keys(closers).forEach(function (how) {
+        posted.length = 0;
+        closers[how]();
+        ok(!sheet(), how + ': closed');
+        eq(posted, ['open', 'closed'], how + ': posted');
+      });
+    },
+    bridgeReportsCloseOnMutation: function () {
+      down(yesNo);
+      eq(posted, ['open'], 'posted on open');
+      var o = document.createElement('option');
+      o.textContent = 'Maybe';
+      yesNo.appendChild(o);
+      return wait(50).then(function () {
+        yesNo.removeChild(o);
+        ok(!sheet(), 'closed');
+        eq(posted, ['open', 'closed'], 'posted');
+      });
+    },
     opensSheetAndPreventsNative: function () {
       eq(down(source), true, 'mousedown prevented');
       ok(sheet(), 'sheet open');
@@ -268,6 +317,7 @@
         ok(thrown, 'open hit appendChild');
         ok(!sheet(), 'no sheet');
         eq(window.__stmSelectSheet.isOpen(), false, 'isOpen');
+        eq(posted, [], 'a failed open posts nothing');
       } finally {
         delete Element.prototype.appendChild;
       }
@@ -283,6 +333,7 @@
       if (i >= names.length) return finish('PASS');
       var name = names[i++];
       events.length = 0;
+      posted.length = 0;
       Promise.resolve().then(tests[name]).then(function () {
         if (window.__stmSelectSheet) window.__stmSelectSheet.close();
         next();

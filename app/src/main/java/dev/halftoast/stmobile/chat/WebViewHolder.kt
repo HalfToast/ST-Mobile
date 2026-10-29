@@ -61,6 +61,16 @@ class WebViewHolder(
     private val _state = MutableStateFlow<ChatState>(ChatState.Loading)
     val state: StateFlow<ChatState> = _state
 
+    private val _sheetOpen = MutableStateFlow(false)
+    /** One of ST's lists is open as a sheet (select-sheet.js). Only ever true while [state] is Ready. */
+    val sheetOpen: StateFlow<Boolean> = _sheetOpen
+
+    /** Every state change goes through here: leaving Ready forgets an open sheet. */
+    private fun setState(s: ChatState) {
+        _state.value = s
+        if (s != ChatState.Ready) _sheetOpen.value = false
+    }
+
     private val assetCache = AssetCache(File(activity.cacheDir, "asset-cache"))
     private var navToken = 0
     private val resolvingAfterReady = java.util.concurrent.atomic.AtomicBoolean(false)
@@ -141,7 +151,7 @@ class WebViewHolder(
         navToken++
         loadGeneration++
         webView.stopLoading()
-        _state.value = ChatState.Unreachable(reason)
+        setState(ChatState.Unreachable(reason))
     }
 
     /** The server URL changed: page hooks are bound to the old origin, so build a new WebView and load. */
@@ -193,6 +203,7 @@ class WebViewHolder(
     private fun recreate() {
         navToken++
         loadGeneration++
+        _sheetOpen.value = false
         cancelFileChooser()
         destroyView(webView)
         serverOrigin = Origins.of(appSettings.serverUrl)
@@ -229,12 +240,12 @@ class WebViewHolder(
 
     /** Shows the snapshot overlay and arms the ready deadline: Loading never outlasts [READY_TIMEOUT_MS]. */
     private fun enterLoading() {
-        _state.value = ChatState.Loading
+        setState(ChatState.Loading)
         val epoch = ++loadingEpoch
         mainHandler.postDelayed({
             if (!destroyed && epoch == loadingEpoch && _state.value == ChatState.Loading) {
                 Log.i(StMobileApp.LOG_TAG, "READY_TIMEOUT: showing the page as it is")
-                _state.value = ChatState.Stalled
+                setState(ChatState.Stalled)
             }
         }, READY_TIMEOUT_MS)
     }
@@ -372,11 +383,11 @@ class WebViewHolder(
                     "\"ready\"" -> {
                         val elapsed = SystemClock.elapsedRealtime() - loadStartedAt
                         Log.i(StMobileApp.LOG_TAG, "ST_READY ms=$elapsed")
-                        _state.value = ChatState.Ready
+                        setState(ChatState.Ready)
                         resolveRevisionAfterReady()
                         readTheme(view, gen)
                     }
-                    "\"login\"" -> _state.value = ChatState.LoginRequired
+                    "\"login\"" -> setState(ChatState.LoginRequired)
                     else -> {
                         val st = _state.value
                         if ((st == ChatState.Loading || st == ChatState.Stalled) && SystemClock.elapsedRealtime() < giveUpAt) {
@@ -387,6 +398,12 @@ class WebViewHolder(
             }
         }
         mainHandler.post(poll)
+    }
+
+    /** The page's sheet opened or closed. An open sheet only counts on the current, Ready page. */
+    private fun onSheetMessage(view: WebView, open: Boolean) {
+        if (destroyed || view !== webView) return
+        _sheetOpen.value = open && _state.value == ChatState.Ready
     }
 
     private fun deliverFiles(uris: List<Uri>) {
@@ -407,7 +424,7 @@ class WebViewHolder(
         recreate()
         if (crashTimes.size > MAX_CRASH_RELOADS) {
             Log.w(StMobileApp.LOG_TAG, "renderer gone (crashed=$crashed) ${crashTimes.size}x in 60 s; giving up")
-            _state.value = ChatState.Unreachable("The page keeps crashing")
+            setState(ChatState.Unreachable("The page keeps crashing"))
         } else {
             Log.w(StMobileApp.LOG_TAG, "renderer gone (crashed=$crashed), recreating")
             reload()
@@ -473,6 +490,7 @@ class WebViewHolder(
         CookieManager.getInstance().setAcceptCookie(true)
         downloads.install(this, serverOrigin)
         ThemeBridge.install(this, serverOrigin, onTheme)
+        SelectSheet.installBridge(this, serverOrigin) { open -> onSheetMessage(this, open) }
         SelectSheet.install(this, serverOrigin, selectSheetScript)
 
         webViewClient = object : WebViewClient() {
@@ -490,6 +508,7 @@ class WebViewHolder(
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                 if (view !== webView) return
                 loadGeneration++
+                _sheetOpen.value = false // a new document has no sheet open
                 mainFrameFailed = false
                 loadStartedAt = SystemClock.elapsedRealtime()
                 onServerPage = Origins.isOn(url, serverOrigin)
@@ -498,10 +517,10 @@ class WebViewHolder(
                 pendingHttpError = null
                 when {
                     // Another site (OAuth sign-in): shown as is, no overlay, no readiness polling.
-                    !onServerPage -> _state.value = ChatState.External
+                    !onServerPage -> setState(ChatState.External)
                     refused != null -> {
                         mainFrameFailed = true
-                        _state.value = ChatState.Unreachable(refused)
+                        setState(ChatState.Unreachable(refused))
                     }
                     else -> enterLoading()
                 }
@@ -520,7 +539,7 @@ class WebViewHolder(
                 }
                 val reason = "Server refused the connection ($code).$hint"
                 pendingHttpError = reason
-                _state.value = ChatState.Unreachable(reason)
+                setState(ChatState.Unreachable(reason))
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
@@ -535,7 +554,7 @@ class WebViewHolder(
                 // Off-origin failures show the WebView's own error page; Back returns to SillyTavern.
                 if (!Origins.isOn(request.url.toString(), serverOrigin)) return
                 mainFrameFailed = true
-                _state.value = ChatState.Unreachable(error.description?.toString() ?: "Unknown error")
+                setState(ChatState.Unreachable(error.description?.toString() ?: "Unknown error"))
             }
 
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {

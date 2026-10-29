@@ -158,6 +158,7 @@ class MainActivity : ComponentActivity() {
                 // Read only inside FloatingNav's placement and event code, never during composition.
                 var chatSize by remember { mutableStateOf(IntSize.Zero) }
                 val imeTarget = WindowInsets.imeAnimationTarget
+                val sheetOpen = holder.sheetOpen.collectAsState()
                 val density = LocalDensity.current
                 SideEffect { chatTabShown = screen == Screen.Chat && overlay == Overlay.None }
                 BackHandler {
@@ -223,7 +224,7 @@ class MainActivity : ComponentActivity() {
                             FloatingNav(
                                 position = fab,
                                 containerSize = { chatSize },
-                                hidden = { navHidden(imeTarget.getBottom(density), sheetOpen = false) },
+                                hidden = { navHidden(imeTarget.getBottom(density), sheetOpen.value) },
                                 onMoved = {
                                     fab = it
                                     settings.fabPosition = it
@@ -291,7 +292,8 @@ class MainActivity : ComponentActivity() {
 
     override fun onStop() {
         panelVm.setAppForeground(false)
-        if (chatTabShown && holder.state.value == ChatState.Ready) {
+        // Not with a list sheet open: the next launch would show a picture of the sheet over the chat.
+        if (chatTabShown && holder.state.value == ChatState.Ready && !holder.sheetOpen.value) {
             Snapshot.save(this, holder.webView)
         }
         super.onStop()
