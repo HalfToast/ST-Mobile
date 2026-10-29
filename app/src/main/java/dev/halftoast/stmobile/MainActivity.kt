@@ -205,13 +205,23 @@ class MainActivity : ComponentActivity() {
                 val unreachableActions = remember {
                     UnreachableActions(
                         classify = { unreachableProbe.classify(settings.serverUrl) },
+                        vpnUp = unreachableProbe::vpnUp,
                         watchVpn = unreachableProbe::watchVpn,
                         onRetry = holder::retry,
                         onOpenControlCenter = { screen = Screen.Panel },
                         onOpenTailscale = ::openTailscale,
                         // The Control Center's own Start; Chat then recovers the way it does after a
                         // Start there (Ruling 18). Without SSH set up, the Control Center shows Setup.
-                        onStartServer = { if (setupDone) panelVm.request(PanelAction.Start) else screen = Screen.Panel },
+                        onStartServer = {
+                            if (setupDone) {
+                                panelVm.request(PanelAction.Start)
+                                // request() ignores a Start while something runs; run() marks it busy at once.
+                                panelVm.ui.value.busy == PanelAction.Start
+                            } else {
+                                screen = Screen.Panel
+                                false
+                            }
+                        },
                     )
                 }
                 BackHandler {
@@ -271,11 +281,15 @@ class MainActivity : ComponentActivity() {
                                     unreachable = { s ->
                                         // Collected here only: dashboard updates never recompose the chat.
                                         val panel by panelVm.ui.collectAsState()
+                                        val attempt by holder.loadAttempts.collectAsState()
                                         UnreachableScreen(
                                             state = s,
+                                            attempt = attempt,
                                             actions = unreachableActions,
                                             // A Restart from the Control Center also shows Unreachable until it serves.
                                             starting = panel.busy == PanelAction.Start || panel.busy == PanelAction.Restart,
+                                            // Same gate as the Control Center's Start.
+                                            serverOnline = panel.dashboard?.online == true,
                                             lastAction = panel.lastAction,
                                         )
                                     },

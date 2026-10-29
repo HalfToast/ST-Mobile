@@ -61,6 +61,14 @@ class WebViewHolder(
     private val _state = MutableStateFlow<ChatState>(ChatState.Loading)
     val state: StateFlow<ChatState> = _state
 
+    private val _loadAttempts = MutableStateFlow(0)
+    /**
+     * Bumped on every load attempt (each time Loading is entered). A Retry that fails at once can go
+     * Unreachable → Loading → Unreachable within a frame; this still changes, so the Unreachable
+     * screen knows to look again.
+     */
+    val loadAttempts: StateFlow<Int> = _loadAttempts
+
     private val _sheetOpen = MutableStateFlow(false)
     /** One of ST's lists is open as a sheet (select-sheet.js). Only ever true while [state] is Ready. */
     val sheetOpen: StateFlow<Boolean> = _sheetOpen
@@ -241,6 +249,7 @@ class WebViewHolder(
 
     /** Shows the snapshot overlay and arms the ready deadline: Loading never outlasts [READY_TIMEOUT_MS]. */
     private fun enterLoading() {
+        _loadAttempts.value++
         setState(ChatState.Loading)
         val epoch = ++loadingEpoch
         mainHandler.postDelayed({

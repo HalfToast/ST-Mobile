@@ -4,7 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
-import android.net.NetworkRequest
+import dev.halftoast.stmobile.panel.ActionResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.net.ConnectException
@@ -59,6 +59,50 @@ fun serverEndpoint(serverUrl: String): Pair<String, Int>? = try {
     null
 }
 
+/**
+ * Retry at most once per change from "no VPN" to "VPN up". The VPN callback also reports the state it
+ * finds at registration, and the screen registers again after each failed retry, so those reports
+ * must not count as the VPN coming up.
+ */
+class VpnRetryGate {
+    private var lastUp: Boolean? = null
+
+    /** Watching starts with the VPN [vpnUp] as found now. */
+    fun start(vpnUp: Boolean) {
+        lastUp = vpnUp
+    }
+
+    /** The VPN state was reported; true exactly when this is the no-VPN to VPN-up change. */
+    fun onVpnChange(vpnUp: Boolean): Boolean {
+        val retry = lastUp == false && vpnUp
+        if (lastUp != null) lastUp = vpnUp
+        return retry
+    }
+}
+
+/**
+ * The outcome of a Start pressed on the Unreachable screen: armed only when the Control Center took
+ * the request, then the first new last-action result is Start's, shown once.
+ */
+class StartOutcomeWatch {
+    private var armed = false
+    private var before: ActionResult? = null
+
+    /** Start was accepted while [lastAction] was the latest result. */
+    fun arm(lastAction: ActionResult?) {
+        armed = true
+        before = lastAction
+    }
+
+    /** [lastAction] is now the latest result; returns it if it is Start's outcome. */
+    fun onLastAction(lastAction: ActionResult?): ActionResult? {
+        if (!armed || lastAction == null || lastAction === before) return null
+        armed = false
+        before = null
+        return lastAction
+    }
+}
+
 /** The phone-side probes behind [classifyUnreachable]. Logs nothing (addresses are private). */
 class UnreachableProbe(context: Context) {
     private val connectivity = context.applicationContext.getSystemService(ConnectivityManager::class.java)
@@ -84,19 +128,18 @@ class UnreachableProbe(context: Context) {
     }
 
     /**
-     * Calls [onVpnUp] (on a ConnectivityManager thread) when a VPN network becomes available.
-     * Returns the function that unregisters it; call it exactly once.
+     * Reports, on a ConnectivityManager thread, whether this app's default network is a VPN: once at
+     * registration, then on every change. Returns the function that unregisters it; call it once.
      */
-    fun watchVpn(onVpnUp: () -> Unit): () -> Unit {
+    fun watchVpn(onVpnState: (vpnUp: Boolean) -> Unit): () -> Unit {
         val callback = object : ConnectivityManager.NetworkCallback() {
-            override fun onAvailable(network: Network) = onVpnUp()
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) =
+                onVpnState(caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN))
+
+            override fun onLost(network: Network) = onVpnState(false)
         }
-        val request = NetworkRequest.Builder()
-            .addTransportType(NetworkCapabilities.TRANSPORT_VPN)
-            .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
-            .build()
         try {
-            connectivity.registerNetworkCallback(request, callback)
+            connectivity.registerDefaultNetworkCallback(callback)
         } catch (_: Exception) {
             return {}
         }

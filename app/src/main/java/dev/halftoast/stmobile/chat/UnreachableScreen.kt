@@ -29,60 +29,64 @@ import dev.halftoast.stmobile.ui.StButton
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-/** What the Unreachable screen can do; wired by MainActivity. */
+/** What the Unreachable screen can do; wired by MainActivity (it outlives the screen's compositions). */
 class UnreachableActions(
     /** Works out the [UnreachableCase] (off the main thread). */
     val classify: suspend () -> UnreachableCase,
-    /** Watches for a VPN coming up; returns the unregister function. */
-    val watchVpn: (onVpnUp: () -> Unit) -> () -> Unit,
+    val vpnUp: () -> Boolean,
+    /** Reports the VPN state (at once, then on changes); returns the unregister function. */
+    val watchVpn: (onVpnState: (vpnUp: Boolean) -> Unit) -> () -> Unit,
+    /** Kept here, not in the screen: a failed retry re-creates the screen, which must not retry again. */
+    val vpnGate: VpnRetryGate = VpnRetryGate(),
     val onRetry: () -> Unit,
     val onOpenControlCenter: () -> Unit,
     val onOpenTailscale: () -> Unit,
-    /** The Control Center's Start (or Setup, if SSH isn't set up yet). */
-    val onStartServer: () -> Unit,
+    /** The Control Center's Start (or Setup, if SSH isn't set up yet); true if a Start was accepted. */
+    val onStartServer: () -> Boolean,
 )
 
 /**
- * Chat can't reach SillyTavern. The screen says why, as far as the phone can tell (classified each
- * time it shows, so again after Retry), and offers what helps: open Tailscale, start the server, or
- * the Control Center. While the case is being worked out, and when the server's port answers, it
- * shows the plain [state] reason. With Tailscale off it retries once by itself when a VPN comes up.
+ * Chat can't reach SillyTavern. The screen says why, as far as the phone can tell: classified again
+ * whenever [state] changes and after every load attempt ([attempt], so also a Retry that fails within
+ * a frame). It offers what helps: open Tailscale, start the server, or the Control Center. While the
+ * case is being worked out, and when the server's port answers, it shows the plain [state] reason.
+ * With Tailscale off it retries once each time a VPN comes up (see [VpnRetryGate]).
+ * [serverOnline]: the dashboard says the process runs, so Start is off, as in the Control Center.
  */
 @Composable
 fun UnreachableScreen(
     state: ChatState.Unreachable,
+    attempt: Int,
     actions: UnreachableActions,
     starting: Boolean,
+    serverOnline: Boolean,
     lastAction: ActionResult?,
 ) {
     val p = LocalStPalette.current
     var case by remember { mutableStateOf<UnreachableCase?>(null) }
-    LaunchedEffect(Unit) { case = actions.classify() }
+    LaunchedEffect(state, attempt) {
+        case = null
+        case = actions.classify()
+    }
 
     if (case == UnreachableCase.TailscaleOff) {
         val scope = rememberCoroutineScope()
         val retry by rememberUpdatedState(actions.onRetry)
-        DisposableEffect(Unit) {
-            var fired = false
-            val stop = actions.watchVpn {
-                scope.launch {
-                    if (!fired) {
-                        fired = true
-                        retry()
-                    }
-                }
+        DisposableEffect(actions) {
+            actions.vpnGate.start(actions.vpnUp())
+            val stop = actions.watchVpn { up ->
+                scope.launch { if (actions.vpnGate.onVpnChange(up)) retry() }
             }
             onDispose { stop() }
         }
     }
 
     // The outcome of a Start pressed here, shown for a few seconds.
-    var startPressedWith by remember { mutableStateOf<Any?>(NotPressed) }
+    val startWatch = remember { StartOutcomeWatch() }
     var message by remember { mutableStateOf<ActionResult?>(null) }
-    LaunchedEffect(lastAction) {
-        if (startPressedWith !== NotPressed && lastAction != null && lastAction !== startPressedWith) {
-            startPressedWith = NotPressed
-            message = lastAction
+    LaunchedEffect(lastAction) { startWatch.onLastAction(lastAction)?.let { message = it } }
+    LaunchedEffect(message) {
+        if (message != null) {
             delay(MESSAGE_MS)
             message = null
         }
@@ -119,11 +123,11 @@ fun UnreachableScreen(
                         StButton(
                             "Start server",
                             {
-                                startPressedWith = lastAction
-                                actions.onStartServer()
+                                val before = lastAction
+                                if (actions.onStartServer()) startWatch.arm(before)
                             },
                             button,
-                            enabled = !starting,
+                            enabled = !starting && !serverOnline,
                             busy = starting,
                         )
                         StButton("Open Control Center", actions.onOpenControlCenter, button)
@@ -147,5 +151,4 @@ fun UnreachableScreen(
     }
 }
 
-private object NotPressed
 private const val MESSAGE_MS = 6_000L
