@@ -50,8 +50,8 @@ short pulse splash shows first.
 1. Turn Tailscale on, on the phone and on the tablet.
 2. Open the app. Chat works right away once the server URL is right.
 3. Open the Control Center (or Stats, Logs) from the floating button. The setup screen asks for the
-   tablet's SSH port (Termux uses 8022) and user name, and your Termux password **once**. The app then creates a key, installs it on the tablet and
-   uses it from then on. The password is not stored.
+   tablet's SSH port (Termux uses 8022) and user name, and your Termux password **once**. The app
+   then creates a key, installs it on the tablet and uses it from then on. The password is not stored.
 4. The first connection pins the tablet's host key. If it ever changes (for example Termux was
    reinstalled), the app says so; use "Trust new host key" in Settings only if you expect that.
 
