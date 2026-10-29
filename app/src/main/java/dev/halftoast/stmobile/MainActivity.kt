@@ -4,20 +4,23 @@ import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
-import androidx.activity.compose.BackHandler
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.gestures.awaitEachGesture
-import androidx.compose.foundation.gestures.awaitFirstDown
-import androidx.compose.foundation.gestures.waitForUpOrCancellation
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.viewModels
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -25,29 +28,25 @@ import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.input.pointer.PointerEventPass
-import androidx.compose.ui.input.pointer.pointerInput
-import androidx.activity.viewModels
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import java.lang.ref.WeakReference
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withTimeoutOrNull
 import dev.halftoast.stmobile.chat.BackAction
 import dev.halftoast.stmobile.chat.BackPressPolicy
 import dev.halftoast.stmobile.chat.ChatScreen
@@ -58,24 +57,29 @@ import dev.halftoast.stmobile.chat.backProbesPage
 import dev.halftoast.stmobile.chat.isLiveServerPage
 import dev.halftoast.stmobile.chat.reloadWhenServerBack
 import dev.halftoast.stmobile.keepalive.KeepAliveService
+import dev.halftoast.stmobile.logs.LogsScreen
+import dev.halftoast.stmobile.nav.FloatingNav
+import dev.halftoast.stmobile.nav.icon
 import dev.halftoast.stmobile.panel.AndroidProbeSource
 import dev.halftoast.stmobile.panel.PanelScreen
 import dev.halftoast.stmobile.panel.PanelViewModel
+import dev.halftoast.stmobile.panel.Probes
 import dev.halftoast.stmobile.settings.SettingsScreen
 import dev.halftoast.stmobile.settings.SetupScreen
 import dev.halftoast.stmobile.stats.StatsScreen
 import dev.halftoast.stmobile.stats.StatsViewModel
-import dev.halftoast.stmobile.logs.LogsScreen
-import dev.halftoast.stmobile.panel.Probes
+import dev.halftoast.stmobile.ui.LocalStPalette
+import dev.halftoast.stmobile.ui.StMobileTheme
+import dev.halftoast.stmobile.ui.StTopBar
 
-enum class Tab(val label: String) {
+enum class Screen(val title: String) {
     Chat("Chat"),
-    Panel("Panel"),
+    Panel("Control Center"),
     Stats("Stats"),
     Logs("Logs"),
 }
 
-/** Full-screen pages shown over the tabs. */
+/** Full-screen pages shown in place of the current [Screen]. */
 enum class Overlay { None, Settings, Setup }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -131,18 +135,25 @@ class MainActivity : ComponentActivity() {
                 if (it.isLiveServerPage) panelVm.onChatReady()
             }
         }
+        enableEdgeToEdge(
+            SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+        )
         setContent {
-            MaterialTheme {
-                var selected by rememberSaveable { mutableStateOf(Tab.Chat) }
+            val theme by app.themeStore.theme.collectAsState()
+            StMobileTheme(theme) {
+                val palette = LocalStPalette.current
+                var screen by rememberSaveable { mutableStateOf(Screen.Chat) }
                 var overlay by rememberSaveable { mutableStateOf(Overlay.None) }
                 // Chat works without SSH; Panel, Stats and Logs show Setup until it's done.
                 var setupDone by rememberSaveable { mutableStateOf(settings.setupComplete) }
-                SideEffect { chatTabShown = selected == Tab.Chat && overlay == Overlay.None }
+                var fab by remember { mutableStateOf(settings.fabPosition) }
+                SideEffect { chatTabShown = screen == Screen.Chat && overlay == Overlay.None }
                 BackHandler {
                     when {
                         overlay == Overlay.Setup -> overlay = Overlay.Settings
                         overlay == Overlay.Settings -> overlay = Overlay.None
-                        selected != Tab.Chat -> selected = Tab.Chat
+                        screen != Screen.Chat -> screen = Screen.Chat
                         else -> handleChatBack()
                     }
                 }
@@ -182,83 +193,74 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
-                    Overlay.None -> Scaffold(
-                        modifier = Modifier.fillMaxSize(),
-                        bottomBar = {
-                            NavigationBar {
-                                Tab.entries.forEach { tab ->
-                                    NavigationBarItem(
-                                        selected = tab == selected,
-                                        onClick = { selected = tab },
-                                        modifier = if (BuildConfig.DEBUG && tab == Tab.Chat) {
-                                            // Debug only: long-press kills the renderer to test recovery.
-                                            Modifier.pointerInput(Unit) {
-                                                awaitEachGesture {
-                                                    awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
-                                                    val up = withTimeoutOrNull(800) {
-                                                        waitForUpOrCancellation(PointerEventPass.Initial)
-                                                    }
-                                                    if (up == null) {
-                                                        Log.i(StMobileApp.LOG_TAG, "debug: killing renderer")
-                                                        holder.webView.loadUrl("chrome://kill")
-                                                    }
-                                                }
-                                            }
-                                        } else Modifier,
-                                        icon = {},
-                                        label = { Text(tab.label) },
-                                        alwaysShowLabel = true,
-                                    )
-                                }
-                            }
-                        },
-                    ) { padding ->
-                        val content = Modifier.padding(padding).consumeWindowInsets(padding)
-                        when {
-                            selected == Tab.Chat -> ChatScreen(
+                    Overlay.None -> if (screen == Screen.Chat) {
+                        // The dark background is what shows while the WebView already has its final
+                        // height and the keyboard is still sliding (no light strip).
+                        Box(Modifier.fillMaxSize().background(Color(palette.background))) {
+                            ChatScreen(
                                 holder = holder,
-                                onOpenControlCenter = { selected = Tab.Panel },
+                                onOpenControlCenter = { screen = Screen.Panel },
                                 // Jump straight to the keyboard's final height: following the slide frame
                                 // by frame resizes the WebView, and so re-lays-out SillyTavern, every frame.
-                                modifier = content.windowInsetsPadding(WindowInsets.imeAnimationTarget),
+                                modifier = Modifier
+                                    .windowInsetsPadding(WindowInsets.systemBars)
+                                    .windowInsetsPadding(WindowInsets.imeAnimationTarget),
                             )
-                            !setupDone -> SetupScreen(
-                                settings = settings,
-                                keys = app.keyManager,
-                                shell = app.remoteShell,
-                                onComplete = { urlChanged ->
-                                    setupDone = true
-                                    if (urlChanged) holder.onServerUrlChanged()
+                            FloatingNav(
+                                position = fab,
+                                onMoved = {
+                                    fab = it
+                                    settings.fabPosition = it
                                 },
-                                onOpenSettings = { overlay = Overlay.Settings },
-                                modifier = content,
+                                onOpen = { screen = it },
+                                // Debug only: long-press kills the renderer to test recovery.
+                                debugLongPress = if (BuildConfig.DEBUG) {
+                                    {
+                                        Log.i(StMobileApp.LOG_TAG, "debug: killing renderer")
+                                        holder.webView.loadUrl("chrome://kill")
+                                    }
+                                } else null,
                             )
-                            selected == Tab.Panel -> Column(content) {
-                                TopAppBar(
-                                    title = { Text("Control Center") },
-                                    windowInsets = WindowInsets(0),
-                                    actions = {
-                                        IconButton(onClick = { overlay = Overlay.Settings }) {
-                                            Icon(Icons.Filled.Settings, contentDescription = "Settings")
-                                        }
+                        }
+                    } else Surface(Modifier.fillMaxSize(), color = Color(palette.background)) {
+                        Column(Modifier.windowInsetsPadding(WindowInsets.systemBars)) {
+                            StTopBar(screen.title, onBack = { screen = Screen.Chat }) {
+                                Screen.entries.filter { it != Screen.Chat && it != screen }.forEach { other ->
+                                    IconButton(onClick = { screen = other }) {
+                                        Icon(other.icon, contentDescription = other.title, Modifier.size(20.dp), tint = Color(palette.muted))
+                                    }
+                                }
+                                if (screen == Screen.Panel) {
+                                    IconButton(onClick = { overlay = Overlay.Settings }) {
+                                        Icon(Icons.Filled.Settings, contentDescription = "Settings", Modifier.size(20.dp), tint = Color(palette.muted))
+                                    }
+                                }
+                            }
+                            when {
+                                !setupDone -> SetupScreen(
+                                    settings = settings,
+                                    keys = app.keyManager,
+                                    shell = app.remoteShell,
+                                    onComplete = { urlChanged ->
+                                        setupDone = true
+                                        if (urlChanged) holder.onServerUrlChanged()
                                     },
+                                    onOpenSettings = { overlay = Overlay.Settings },
                                 )
-                                PanelScreen(
+                                screen == Screen.Panel -> PanelScreen(
                                     vm = panelVm,
                                     onOpenSettings = { overlay = Overlay.Settings },
-                                    onOpenLogs = { selected = Tab.Logs },
+                                    onOpenLogs = { screen = Screen.Logs },
+                                )
+                                screen == Screen.Stats -> StatsScreen(
+                                    vm = statsVm,
+                                    onOpenSettings = { overlay = Overlay.Settings },
+                                )
+                                else -> LogsScreen(
+                                    shell = app.remoteShell,
+                                    onOpenSettings = { overlay = Overlay.Settings },
                                 )
                             }
-                            selected == Tab.Stats -> StatsScreen(
-                                vm = statsVm,
-                                onOpenSettings = { overlay = Overlay.Settings },
-                                modifier = content,
-                            )
-                            else -> LogsScreen(
-                                shell = app.remoteShell,
-                                onOpenSettings = { overlay = Overlay.Settings },
-                                modifier = content,
-                            )
                         }
                     }
                 }

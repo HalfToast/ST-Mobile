@@ -1,3 +1,7 @@
 <resources>
-    <style name="Theme.StMobile" parent="android:Theme.Material.NoActionBar" />
+    <style name="Theme.StMobile" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#18181B</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
 </resources>

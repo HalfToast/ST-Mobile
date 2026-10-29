@@ -1,6 +1,8 @@
 package dev.halftoast.stmobile.settings
 
 import android.content.SharedPreferences
+import dev.halftoast.stmobile.nav.FabEdge
+import dev.halftoast.stmobile.nav.FabPosition
 import java.net.URI
 
 class AppSettings(private val prefs: SharedPreferences) {
@@ -41,6 +43,16 @@ class AppSettings(private val prefs: SharedPreferences) {
         get() = prefs.getString(KEY_ST_THEME_JSON, null)
         set(value) = prefs.edit().putString(KEY_ST_THEME_JSON, value).apply()
 
+    var fabPosition: FabPosition
+        get() {
+            val d = FabPosition.Default
+            val edge = FabEdge.entries.firstOrNull { it.name == prefs.getString(KEY_FAB_EDGE, null) } ?: d.edge
+            val fraction = prefs.getFloat(KEY_FAB_FRACTION, d.fraction)
+                .coerceIn(FabPosition.MIN_FRACTION, FabPosition.MAX_FRACTION)
+            return FabPosition(edge, fraction)
+        }
+        set(value) = prefs.edit().putString(KEY_FAB_EDGE, value.edge.name).putFloat(KEY_FAB_FRACTION, value.fraction).apply()
+
     /** Debug-only A/B switch; callers must also check BuildConfig.DEBUG. */
     val debugDisableAssetCache: Boolean
         get() = prefs.getBoolean(KEY_DEBUG_DISABLE_ASSET_CACHE, false)
@@ -61,6 +73,8 @@ class AppSettings(private val prefs: SharedPreferences) {
         private const val KEY_SETUP_COMPLETE = "setup_complete"
         private const val KEY_KNOWN_HOST_KEY = "known_host_key"
         private const val KEY_ST_THEME_JSON = "st_theme_json"
+        private const val KEY_FAB_EDGE = "fab_edge"
+        private const val KEY_FAB_FRACTION = "fab_fraction"
 
         fun isValidServerUrl(url: String): Boolean {
             val trimmed = url.trim()
