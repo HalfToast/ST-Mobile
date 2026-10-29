@@ -12,11 +12,13 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Settings
@@ -76,7 +78,7 @@ enum class Tab(val label: String) {
 /** Full-screen pages shown over the tabs. */
 enum class Overlay { None, Settings, Setup }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 class MainActivity : ComponentActivity() {
     private lateinit var holder: WebViewHolder
     private var chatTabShown = true
@@ -216,7 +218,9 @@ class MainActivity : ComponentActivity() {
                             selected == Tab.Chat -> ChatScreen(
                                 holder = holder,
                                 onOpenControlCenter = { selected = Tab.Panel },
-                                modifier = content.imePadding(),
+                                // Jump straight to the keyboard's final height: following the slide frame
+                                // by frame resizes the WebView, and so re-lays-out SillyTavern, every frame.
+                                modifier = content.windowInsetsPadding(WindowInsets.imeAnimationTarget),
                             )
                             !setupDone -> SetupScreen(
                                 settings = settings,
