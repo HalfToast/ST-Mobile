@@ -59,4 +59,12 @@ class StThemeTest {
         s.update(mapOf("--SmartThemeQuoteColor" to "#ff0000")); s.update(mapOf("--SmartThemeQuoteColor" to "#ff0000"))
         assertEquals(1, saved); assertEquals(0xFFFF0000.toInt(), ThemeStore({ stored }, {}).theme.value.accent)
     }
+    @Test fun blankInputKeepsRememberedTheme() {
+        var saved = 0; var stored: String? = null
+        val s = ThemeStore(load = { stored }, save = { stored = it; saved++ })
+        s.update(mapOf("--SmartThemeQuoteColor" to "#ff0000"))
+        s.update(emptyMap()); s.update(mapOf("--SmartThemeQuoteColor" to ""))
+        assertEquals(0xFFFF0000.toInt(), s.theme.value.accent)
+        assertEquals(1, saved)
+    }
 }

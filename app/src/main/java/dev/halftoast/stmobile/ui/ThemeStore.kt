@@ -9,6 +9,7 @@ class ThemeStore(load: () -> String?, private val save: (String) -> Unit) {
     val theme: StateFlow<StTheme> = _theme
 
     fun update(vars: Map<String, String>) {
+        if (vars.values.all { it.isBlank() }) return // unreadable page: keep the remembered theme
         val next = StTheme.fromCssVars(vars)
         if (next == _theme.value) return
         _theme.value = next
