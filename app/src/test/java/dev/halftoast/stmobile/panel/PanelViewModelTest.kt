@@ -394,12 +394,29 @@ class PanelViewModelTest {
         assertEquals(0, restartedCalls)
     }
 
-    @Test fun onlineButNotAnsweringNeedsTwoPollsInARow() = runTest {
-        shell.dashboards = mutableListOf(ONLINE, NO_HTTP, ONLINE, NO_HTTP, NO_HTTP)
-        repeat(3) { vm.refresh(); advanceUntilIdle() }
-        assertTrue(downReasons.isEmpty()) // a single slow answer is not "down"
-        repeat(2) { vm.refresh(); advanceUntilIdle() }
-        assertEquals(1, downReasons.size)
+    @Test fun aliveButNotAnsweringNeverMarksDown() = runTest {
+        // A busy server (e.g. streaming a generation) can miss the 1 s curl; reloading Chat would kill it.
+        shell.dashboards = mutableListOf(ONLINE, NO_HTTP, NO_HTTP, NO_HTTP, ONLINE)
+        repeat(5) { vm.refresh(); advanceUntilIdle() }
+        assertTrue(downReasons.isEmpty())
+        assertEquals(0, restartedCalls) // and no reload when it answers again
+        assertEquals("200", vm.ui.value.dashboard?.httpCode) // the health card followed every poll
+    }
+
+    @Test fun twoHttpFailuresWithProcessAliveDontMarkDown() = runTest {
+        shell.dashboards = mutableListOf(NO_HTTP, NO_HTTP)
+        vm.refresh(); advanceUntilIdle()
+        vm.refresh(); advanceUntilIdle()
+        assertTrue(downReasons.isEmpty())
+        assertEquals("000", vm.ui.value.dashboard?.httpCode)
+        assertTrue(vm.ui.value.dashboard!!.online)
+    }
+
+    @Test fun processGoneMarksDownEvenWithoutStop() = runTest {
+        shell.dashboards = mutableListOf(ONLINE, OFFLINE)
+        vm.refresh(); advanceUntilIdle()
+        vm.refresh(); advanceUntilIdle()
+        assertEquals(listOf("SillyTavern is stopped"), downReasons)
     }
 
     @Test fun serverBackAfterObservedStopReloadsChatOnce() = runTest {

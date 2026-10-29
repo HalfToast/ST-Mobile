@@ -106,8 +106,10 @@ internal fun isCoveredBy(ip: String, entries: List<String>): Boolean = entries.a
  * @param onServerRestarted called once when a fresh dashboard shows the server serving again after a
  *   Start/Restart or after the server was seen down (also if it was started outside the app); wired to
  *   WebViewHolder.reload() so the Chat tab recovers.
- * @param onServerDown called once when the server is seen down (a successful Stop, a dashboard with
- *   online=0, or two dashboards in a row where HTTP didn't answer); wired to
+ * @param onServerDown called once when the server is seen down: a successful Stop, or a fresh dashboard
+ *   showing the process gone (online=0 / no pid). A running process that misses the 1 s HTTP check
+ *   never counts (a busy server streaming a generation can miss it; marking down would reload Chat
+ *   and kill the generation), it only shows on the Panel's health card. Wired to
  *   WebViewHolder.markServerDown() so Chat shows the Unreachable screen instead of a stale page.
  */
 class PanelViewModel(
@@ -133,8 +135,6 @@ class PanelViewModel(
     private var reloadPending = false
     /** [onServerDown] was called and the server hasn't been seen serving since. */
     private var downNotified = false
-    /** Consecutive fresh dashboards with a live process whose HTTP didn't answer. */
-    private var notAnswering = 0
 
     /** Polls the dashboard every [POLL_MS] while true. The screen sets it from tab visibility and lifecycle. */
     fun setVisible(visible: Boolean) {
@@ -386,24 +386,19 @@ class PanelViewModel(
         }
     }
 
-    /** Chat follows the server: down once when it stops answering, one reload when it serves again. */
+    /**
+     * Chat follows the server: down once when the process is gone, one reload when it serves again.
+     * A live process that misses the HTTP check changes nothing here (see [onServerDown]).
+     */
     private fun observe(d: DashboardState) {
         when {
-            d.serving -> {
-                notAnswering = 0
-                if (reloadPending || downNotified) {
-                    reloadPending = false
-                    downNotified = false
-                    servingTriesLeft = 0
-                    onServerRestarted()
-                }
+            d.serving -> if (reloadPending || downNotified) {
+                reloadPending = false
+                downNotified = false
+                servingTriesLeft = 0
+                onServerRestarted()
             }
-            !d.online -> {
-                notAnswering = 0
-                markDown(STOPPED)
-            }
-            // Live process, no HTTP answer: could be one slow reply, so wait for a second in a row.
-            ++notAnswering >= 2 -> markDown("SillyTavern is not responding")
+            !d.online || d.pid == null -> markDown(STOPPED)
         }
     }
 
