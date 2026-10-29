@@ -120,7 +120,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val app = application as StMobileApp
         val settings = app.settings
-        holder = WebViewHolder(this, settings)
+        holder = WebViewHolder(this, settings, app.themeStore::update)
         currentHolder = WeakReference(holder)
         if (settings.keepAliveEnabled) KeepAliveService.start(this) else KeepAliveService.stop(this)
         lifecycleScope.launch {

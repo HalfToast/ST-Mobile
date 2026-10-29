@@ -28,6 +28,7 @@ import dev.halftoast.stmobile.StMobileApp
 import dev.halftoast.stmobile.settings.AppSettings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import org.json.JSONArray
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -37,7 +38,11 @@ import kotlin.concurrent.thread
  * Owns the single SillyTavern WebView for the lifetime of the Activity, and destroys it with the
  * Activity. After [destroy], every entry point is a no-op and pending callbacks are dropped.
  */
-class WebViewHolder(private val activity: ComponentActivity, private val appSettings: AppSettings) {
+class WebViewHolder(
+    private val activity: ComponentActivity,
+    private val appSettings: AppSettings,
+    private val onTheme: (Map<String, String>) -> Unit = {},
+) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val downloads = Downloads(activity, mainHandler)
@@ -338,6 +343,19 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
      * Polls for SillyTavern's UI on a server page. Keeps polling after the ready deadline (Stalled),
      * more slowly, so a slow boot still ends up Ready; gives up after [POLL_GIVE_UP_MS].
      */
+    private fun readTheme(view: WebView, gen: Int) {
+        view.evaluateJavascript(ThemeBridge.readAndWatchScript()) { raw ->
+            if (!isCurrent(gen, view) || raw == null || raw == "null") return@evaluateJavascript
+            val vars = try {
+                JSONArray("[$raw]").optString(0)
+            } catch (_: Exception) {
+                null
+            }?.let(ThemeBridge::parseMessage) ?: return@evaluateJavascript
+            Log.i(StMobileApp.LOG_TAG, "ST_THEME accent=${vars["--SmartThemeQuoteColor"]}")
+            onTheme(vars)
+        }
+    }
+
     private fun startReadyPolling() {
         val gen = loadGeneration
         if (pollingGeneration == gen) return
@@ -355,6 +373,7 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
                         Log.i(StMobileApp.LOG_TAG, "ST_READY ms=$elapsed")
                         _state.value = ChatState.Ready
                         resolveRevisionAfterReady()
+                        readTheme(view, gen)
                     }
                     "\"login\"" -> _state.value = ChatState.LoginRequired
                     else -> {
@@ -452,6 +471,7 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         }
         CookieManager.getInstance().setAcceptCookie(true)
         downloads.install(this, serverOrigin)
+        ThemeBridge.install(this, serverOrigin, onTheme)
 
         webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
