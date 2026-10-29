@@ -1,5 +1,8 @@
 package dev.halftoast.stmobile
 
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
@@ -65,6 +68,9 @@ import dev.halftoast.stmobile.chat.BackPressPolicy
 import dev.halftoast.stmobile.chat.ChatScreen
 import dev.halftoast.stmobile.chat.ChatState
 import dev.halftoast.stmobile.chat.Snapshot
+import dev.halftoast.stmobile.chat.UnreachableActions
+import dev.halftoast.stmobile.chat.UnreachableProbe
+import dev.halftoast.stmobile.chat.UnreachableScreen
 import dev.halftoast.stmobile.chat.WebViewHolder
 import dev.halftoast.stmobile.chat.backProbesPage
 import dev.halftoast.stmobile.chat.isLiveServerPage
@@ -77,6 +83,7 @@ import dev.halftoast.stmobile.nav.navHidden
 import dev.halftoast.stmobile.nav.slideAnimates
 import dev.halftoast.stmobile.nav.icon
 import dev.halftoast.stmobile.panel.AndroidProbeSource
+import dev.halftoast.stmobile.panel.PanelAction
 import dev.halftoast.stmobile.panel.PanelScreen
 import dev.halftoast.stmobile.panel.PanelViewModel
 import dev.halftoast.stmobile.panel.Probes
@@ -195,6 +202,18 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 SideEffect { chatTabShown = chatSettled(screen, overlay, covering) }
+                val unreachableActions = remember {
+                    UnreachableActions(
+                        classify = { unreachableProbe.classify(settings.serverUrl) },
+                        watchVpn = unreachableProbe::watchVpn,
+                        onRetry = holder::retry,
+                        onOpenControlCenter = { screen = Screen.Panel },
+                        onOpenTailscale = ::openTailscale,
+                        // The Control Center's own Start; Chat then recovers the way it does after a
+                        // Start there (Ruling 18). Without SSH set up, the Control Center shows Setup.
+                        onStartServer = { if (setupDone) panelVm.request(PanelAction.Start) else screen = Screen.Panel },
+                    )
+                }
                 BackHandler {
                     when {
                         overlay == Overlay.Setup -> overlay = Overlay.Settings
@@ -249,7 +268,17 @@ class MainActivity : ComponentActivity() {
                             ) {
                                 ChatScreen(
                                     holder = holder,
-                                    onOpenControlCenter = { screen = Screen.Panel },
+                                    unreachable = { s ->
+                                        // Collected here only: dashboard updates never recompose the chat.
+                                        val panel by panelVm.ui.collectAsState()
+                                        UnreachableScreen(
+                                            state = s,
+                                            actions = unreachableActions,
+                                            // A Restart from the Control Center also shows Unreachable until it serves.
+                                            starting = panel.busy == PanelAction.Start || panel.busy == PanelAction.Restart,
+                                            lastAction = panel.lastAction,
+                                        )
+                                    },
                                     // Jump straight to the keyboard's final height: following the slide frame
                                     // by frame resizes the WebView, and so re-lays-out SillyTavern, every frame.
                                     modifier = Modifier
@@ -351,6 +380,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val unreachableProbe by lazy { UnreachableProbe(this) }
+
+    /** Tailscale's own app, or its Play Store page if it isn't installed. */
+    private fun openTailscale() {
+        val launch = packageManager.getLaunchIntentForPackage(TAILSCALE_PACKAGE)
+        val intents = listOfNotNull(
+            launch,
+            Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$TAILSCALE_PACKAGE")),
+            Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=$TAILSCALE_PACKAGE")),
+        )
+        for (intent in intents) {
+            try {
+                startActivity(intent)
+                return
+            } catch (_: ActivityNotFoundException) {
+            }
+        }
+    }
+
     /** Edge-to-edge with transparent bars; dark icons over a [light] background, light ones otherwise. */
     private fun applySystemBars(light: Boolean) {
         val clear = android.graphics.Color.TRANSPARENT
@@ -373,6 +421,8 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        const val TAILSCALE_PACKAGE = "com.tailscale.ipn"
+
         /** The live Activity's holder, for [panelVm]'s callbacks. Weak: never keeps an Activity alive. */
         private var currentHolder = WeakReference<WebViewHolder>(null)
     }

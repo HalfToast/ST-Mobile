@@ -1,31 +1,37 @@
 package dev.halftoast.stmobile.chat
 
 import android.widget.FrameLayout
-import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -33,10 +39,19 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import dev.halftoast.stmobile.ui.LocalStPalette
-import dev.halftoast.stmobile.ui.StButton
 
+/**
+ * The chat WebView with its state overlays: a "Reconnecting…" pill (over the last snapshot, which
+ * swallows taps) while Loading, a "Still loading… Retry" pill while Stalled, and [unreachable] over
+ * everything while Unreachable. The overlays are small layers over the WebView; nothing here resizes
+ * or re-composites it.
+ */
 @Composable
-fun ChatScreen(holder: WebViewHolder, onOpenControlCenter: () -> Unit, modifier: Modifier = Modifier) {
+fun ChatScreen(
+    holder: WebViewHolder,
+    unreachable: @Composable (ChatState.Unreachable) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     val state by holder.state.collectAsState()
     val context = LocalContext.current
     // Decoded off the main thread; re-read (and dropped at once) whenever the snapshot is cleared.
@@ -52,6 +67,7 @@ fun ChatScreen(holder: WebViewHolder, onOpenControlCenter: () -> Unit, modifier:
             factory = { ctx -> FrameLayout(ctx).also { holder.attach(it) } },
             onRelease = { holder.detach(it) },
         )
+        val pillPlace = Modifier.align(Alignment.TopCenter).padding(top = 12.dp)
         when (val s = state) {
             ChatState.Loading -> {
                 snapshot?.let { bitmap ->
@@ -65,57 +81,68 @@ fun ChatScreen(holder: WebViewHolder, onOpenControlCenter: () -> Unit, modifier:
                             contentScale = ContentScale.Crop,
                             alignment = Alignment.TopCenter,
                         )
-                        Surface(
-                            Modifier.align(Alignment.TopCenter).padding(top = 12.dp),
-                            shape = RoundedCornerShape(50),
-                            color = Color(p.box).copy(alpha = 0.92f),
-                            border = BorderStroke(1.dp, Color(p.border)),
-                        ) {
-                            Text(
-                                "Reconnecting…",
-                                Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
-                                color = Color(p.text),
-                                style = MaterialTheme.typography.labelLarge,
-                            )
-                        }
                     }
                 }
-                LinearProgressIndicator(
-                    Modifier.fillMaxWidth().align(Alignment.TopCenter),
+                StatusPill("Reconnecting…", pillPlace)
+            }
+            ChatState.Stalled -> StatusPill("Still loading…", pillPlace) {
+                Text(
+                    "Retry",
+                    Modifier
+                        .clip(RoundedCornerShape(50))
+                        .clickable(onClick = holder::retry)
+                        .padding(horizontal = 10.dp, vertical = 2.dp),
                     color = Color(p.accent),
-                    trackColor = Color(p.border),
+                    style = MaterialTheme.typography.labelLarge,
                 )
             }
-            ChatState.Stalled -> Surface(
-                Modifier.fillMaxWidth().align(Alignment.TopCenter),
-                color = Color(p.box),
-            ) {
-                Row(
-                    Modifier.padding(start = 16.dp, end = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("Still loading…", Modifier.weight(1f), color = Color(p.text), style = MaterialTheme.typography.labelLarge)
-                    TextButton(onClick = holder::retry) { Text("Retry", color = Color(p.accent)) }
-                }
-            }
             ChatState.Ready, ChatState.LoginRequired, ChatState.External -> Unit
-            is ChatState.Unreachable -> Surface(Modifier.fillMaxSize(), color = Color(p.background)) {
-                Column(
-                    Modifier.fillMaxSize().padding(24.dp),
-                    verticalArrangement = Arrangement.Center,
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Text("SillyTavern is unreachable", color = Color(p.text), style = MaterialTheme.typography.titleLarge)
-                    Text(s.reason, Modifier.padding(vertical = 12.dp), color = Color(p.muted), style = MaterialTheme.typography.bodyMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        StButton("Retry", holder::retry, Modifier.width(140.dp))
-                        StButton("Open Control Center", onOpenControlCenter, Modifier.width(180.dp))
-                    }
-                }
-            }
+            is ChatState.Unreachable -> unreachable(s)
         }
     }
 }
+
+/** ST-style status pill: `box` fill, 1 dp border, a softly pulsing accent dot, [text], then [action]. */
+@Composable
+private fun StatusPill(text: String, modifier: Modifier, action: (@Composable () -> Unit)? = null) {
+    val p = LocalStPalette.current
+    val shape = RoundedCornerShape(50)
+    val pulse = rememberInfiniteTransition(label = "pulse")
+    // Read only in the dot's layer: the pulse redraws that layer, nothing else.
+    val dot by pulse.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(PULSE_HALF_MS), RepeatMode.Reverse),
+        label = "dot",
+    )
+    Row(
+        modifier
+            .background(Color(p.box), shape)
+            .border(1.dp, Color(p.border), shape)
+            .padding(start = 12.dp, end = if (action == null) 14.dp else 4.dp, top = 6.dp, bottom = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            Modifier
+                .size(8.dp)
+                .graphicsLayer {
+                    alpha = dot
+                    scaleX = 0.8f + 0.2f * dot
+                    scaleY = 0.8f + 0.2f * dot
+                }
+                .background(Color(p.accent), CircleShape),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(text, color = Color(p.text), style = MaterialTheme.typography.labelLarge)
+        action?.let {
+            Spacer(Modifier.width(4.dp))
+            it()
+        }
+    }
+}
+
+/** Half of the pill dot's ~1.2 s pulse. */
+private const val PULSE_HALF_MS = 600
 
 /** Consumes every pointer event that lands here, so views underneath (the WebView) never get it. */
 private fun Modifier.consumeAllPointerInput(): Modifier = pointerInput(Unit) {
