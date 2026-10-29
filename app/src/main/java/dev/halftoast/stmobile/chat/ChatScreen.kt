@@ -46,7 +46,8 @@ fun ChatScreen(holder: WebViewHolder, onOpenControlCenter: () -> Unit, modifier:
                         bitmap = snapshot,
                         contentDescription = null,
                         modifier = Modifier.fillMaxSize(),
-                        contentScale = ContentScale.FillBounds,
+                        contentScale = ContentScale.Crop,
+                        alignment = Alignment.TopCenter,
                     )
                     Surface(
                         Modifier.align(Alignment.TopCenter).padding(top = 12.dp),

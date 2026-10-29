@@ -30,6 +30,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import dev.halftoast.stmobile.chat.BackAction
 import dev.halftoast.stmobile.chat.BackPressPolicy
@@ -55,6 +57,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         val settings = AppSettings(getSharedPreferences("settings", Context.MODE_PRIVATE))
         holder = WebViewHolder(this, settings)
+        lifecycleScope.launch {
+            holder.state.collect { if (it == ChatState.LoginRequired) Snapshot.clear(applicationContext) }
+        }
         setContent {
             MaterialTheme {
                 var selected by rememberSaveable { mutableStateOf(Tab.Chat) }

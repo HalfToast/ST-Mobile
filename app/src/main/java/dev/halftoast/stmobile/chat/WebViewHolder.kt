@@ -54,8 +54,8 @@ sealed interface ChatState {
 /** Owns the single SillyTavern WebView for the lifetime of the Activity. */
 class WebViewHolder(private val activity: ComponentActivity, private val appSettings: AppSettings) {
 
-    private val handler = Handler(Looper.getMainLooper())
-    private val downloads = Downloads(activity, handler)
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val downloads = Downloads(activity, mainHandler)
 
     var webView: WebView = createWebView()
         private set
@@ -156,7 +156,7 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
                 "var d=document.querySelectorAll('dialog[open]'),t=d[d.length-1];if(t){t.dispatchEvent(new Event('cancel',{cancelable:true}));}else{(document.activeElement||document).dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));}return n;})()",
         ) { beforeRaw ->
             val before = beforeRaw?.toIntOrNull() ?: 0
-            handler.postDelayed({
+            mainHandler.postDelayed({
                 webView.evaluateJavascript("document.querySelectorAll('$OPEN_UI_SELECTOR').length") { afterRaw ->
                     val after = afterRaw?.toIntOrNull() ?: before
                     result(after < before)
@@ -177,7 +177,7 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
             val revision = if (cacheDisabled()) null else resolveRevision(serverUrl)
             assetCache.setRevision(revision)
             Log.i(StMobileApp.LOG_TAG, "VERSION_WAIT ms=${SystemClock.elapsedRealtime() - start} revision=${revision ?: "null"}")
-            handler.post {
+            mainHandler.post {
                 if (token == navToken) this@WebViewHolder.webView.loadUrl(serverUrl)
             }
         }
@@ -284,11 +284,11 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
                         readyCallbacks.toList().forEach { it(elapsed) }
                     }
                     "\"login\"" -> _state.value = ChatState.LoginRequired
-                    else -> if (SystemClock.elapsedRealtime() < deadline) handler.postDelayed(poll, POLL_INTERVAL_MS)
+                    else -> if (SystemClock.elapsedRealtime() < deadline) mainHandler.postDelayed(poll, POLL_INTERVAL_MS)
                 }
             }
         }
-        handler.post(poll)
+        mainHandler.post(poll)
     }
 
     private fun deliverFiles(uris: List<Uri>) {
@@ -372,7 +372,7 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
                     if (handled || uri.scheme == "about") return
                     handled = true
                     if (!openExternallyIfForeign(uri)) view.loadUrl(uri.toString()) // same origin: stay here
-                    handler.post { popup.destroy() }
+                    mainHandler.post { popup.destroy() }
                 }
                 popup.webViewClient = object : WebViewClient() {
                     override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {

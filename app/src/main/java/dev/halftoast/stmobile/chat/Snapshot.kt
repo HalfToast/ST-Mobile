@@ -5,6 +5,8 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.view.View
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -17,7 +19,9 @@ object Snapshot {
 
     /** Call on the main thread. Draws the view, then compresses and writes off-thread. */
     fun save(context: Context, view: View) {
-        if (view.width <= 0 || view.height <= 0) return
+        if (!view.isAttachedToWindow || view.width <= 0 || view.height <= 0) return
+        // A keyboard-shortened WebView would produce a distorted snapshot.
+        if (ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()) == true) return
         val bitmap = try {
             Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888).also { view.draw(Canvas(it)) }
         } catch (_: Throwable) {
