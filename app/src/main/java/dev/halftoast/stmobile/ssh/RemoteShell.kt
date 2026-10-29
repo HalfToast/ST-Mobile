@@ -3,7 +3,17 @@ package dev.halftoast.stmobile.ssh
 import kotlinx.coroutines.flow.Flow
 
 interface RemoteShell {
-    suspend fun exec(command: String, stdin: String? = null, timeoutMs: Long = 60_000): ExecResult
+    /**
+     * Runs [command] and returns its output. On timeout or cancellation the session is closed; with
+     * [signalOnCancel] TERM is sent to the remote command first. Pass false for commands that must
+     * finish on the tablet regardless (stpanel actions): the channel just closes and they keep going.
+     */
+    suspend fun exec(
+        command: String,
+        stdin: String? = null,
+        timeoutMs: Long = 60_000,
+        signalOnCancel: Boolean = true,
+    ): ExecResult
     fun stream(command: String): Flow<String>
 }
 

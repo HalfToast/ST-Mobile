@@ -17,7 +17,10 @@ android {
 
     // Release signing keys live in ~/.gradle/gradle.properties (never in the repo). Without them the
     // release build still configures and produces an unsigned APK.
-    val storeFile = providers.gradleProperty("STMOBILE_STORE_FILE").orNull
+    // A leading "~" means the user's home directory (Gradle doesn't expand it).
+    val storeFile = providers.gradleProperty("STMOBILE_STORE_FILE").orNull?.let {
+        if (it == "~" || it.startsWith("~/")) System.getProperty("user.home") + it.substring(1) else it
+    }
     val storePassword = providers.gradleProperty("STMOBILE_STORE_PASSWORD").orNull
     val keyAliasProp = providers.gradleProperty("STMOBILE_KEY_ALIAS").orNull
     val keyPasswordProp = providers.gradleProperty("STMOBILE_KEY_PASSWORD").orNull
@@ -66,6 +69,7 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime)
     implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.lifecycle.process)
     implementation(libs.androidx.core)
     implementation(libs.androidx.webkit)
     implementation(libs.kotlinx.coroutines.android)

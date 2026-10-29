@@ -1,10 +1,12 @@
 package dev.halftoast.stmobile.chat
 
 import android.app.DownloadManager
+import android.content.ContentResolver
 import android.content.ContentValues
 import android.net.Uri
 import android.os.Environment
 import android.os.Handler
+import android.os.SystemClock
 import android.provider.MediaStore
 import android.util.Log
 import android.webkit.CookieManager
@@ -18,34 +20,46 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import dev.halftoast.stmobile.StMobileApp
 import org.json.JSONObject
-import java.net.URI
+import java.io.OutputStream
 import java.security.SecureRandom
-import java.util.Base64
-import java.util.Collections
-import kotlin.concurrent.thread
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
- * Download handling. http(s) goes to DownloadManager. blob: URLs are fetched inside the page
+ * Download handling. http(s) goes to DownloadManager. blob: URLs are read inside the page
  * (SillyTavern revokes blob URLs right after click, so a document-start script delays the
- * revoke and records the anchor's download name) and posted back through an origin-restricted
- * web message listener, one single-use nonce per download.
+ * revoke and records the anchor's download name) and streamed back in ~1 MB pieces through an
+ * origin-restricted web message listener, one single-use nonce per download (see [BlobReceiver]).
+ * Each piece is appended to a pending MediaStore item, so a backup export of hundreds of MB never
+ * sits in memory; the page sends the next piece only after the previous one was written.
  */
-class Downloads(private val activity: ComponentActivity, private val handler: Handler) {
+class Downloads(activity: ComponentActivity, private val handler: Handler) {
 
-    private val pendingNonces: MutableSet<String> = Collections.synchronizedSet(mutableSetOf())
+    private val app = activity.applicationContext
     private val random = SecureRandom()
 
-    /** Scheme://host[:port] of the server, as used by the WebView origin rules. */
-    fun install(webView: WebView, serverUrl: String) {
-        val origin = originOf(serverUrl) ?: return
+    /** All blob work runs here, in message order. */
+    private val worker = Executors.newSingleThreadScheduledExecutor { r -> Thread(r, "st-blob-download") }
+    private val receiver = BlobReceiver(
+        sink = MediaStoreSink(app.contentResolver),
+        now = SystemClock::elapsedRealtime,
+        report = ::toast,
+        log = { Log.w(StMobileApp.LOG_TAG, it) },
+    )
+    private var sweeper: ScheduledFuture<*>? = null // worker thread only
+
+    /** Installs the page hooks for [origin] (scheme://host[:port]); nothing is installed for any other origin. */
+    fun install(webView: WebView, origin: String?) {
+        if (origin == null) return
         if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
             WebViewCompat.addDocumentStartJavaScript(webView, DOCUMENT_START_SCRIPT, setOf(origin))
         } else {
             Log.w(StMobileApp.LOG_TAG, "DOCUMENT_START_SCRIPT unsupported; blob downloads may fail")
         }
         if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
-            WebViewCompat.addWebMessageListener(webView, BRIDGE_NAME, setOf(origin)) { _, message, _, isMainFrame, _ ->
-                if (isMainFrame) onMessage(message)
+            WebViewCompat.addWebMessageListener(webView, BRIDGE_NAME, setOf(origin)) { _, message, _, isMainFrame, reply ->
+                if (isMainFrame) onMessage(message, reply)
             }
         } else {
             Log.w(StMobileApp.LOG_TAG, "WEB_MESSAGE_LISTENER unsupported; blob downloads disabled")
@@ -55,93 +69,152 @@ class Downloads(private val activity: ComponentActivity, private val handler: Ha
     fun onDownloadStart(webView: WebView, url: String, userAgent: String?, disposition: String?, mime: String?) {
         when {
             url.startsWith("blob:") -> downloadBlob(webView, url, disposition, mime)
-            url.startsWith("http") -> downloadHttp(url, userAgent, disposition, mime)
+            url.startsWith("http:") || url.startsWith("https:") -> downloadHttp(url, userAgent, disposition, mime)
         }
     }
 
     private fun downloadHttp(url: String, userAgent: String?, disposition: String?, mime: String?) {
-        val req = DownloadManager.Request(Uri.parse(url))
-            .setMimeType(mime)
-            .addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url) ?: "")
-            .addRequestHeader("User-Agent", userAgent ?: "")
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-        val name = URLUtil.guessFileName(url, disposition, mime)
-        req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
-        activity.getSystemService(DownloadManager::class.java).enqueue(req)
-        Toast.makeText(activity, "Downloading $name", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun downloadBlob(webView: WebView, url: String, disposition: String?, mime: String?) {
-        val nonce = ByteArray(16).also(random::nextBytes).joinToString("") { "%02x".format(it) }
-        pendingNonces += nonce
-        val q = JSONObject::quote
-        val js = "(function(){var u=${q(url)},n=${q(nonce)},names=window.__stmBlobNames;" +
-            "var name=names&&names.get(u)||'';" +
-            "fetch(u).then(function(r){return r.blob();}).then(function(b){" +
-            "var f=new FileReader();f.onloadend=function(){var s=String(f.result);" +
-            "$BRIDGE_NAME.postMessage(JSON.stringify({n:n,ok:true,b64:s.substring(s.indexOf(',')+1)," +
-            "mime:b.type||${q(mime ?: "")},name:name}));};f.readAsDataURL(b);})" +
-            ".catch(function(e){$BRIDGE_NAME.postMessage(JSON.stringify({n:n,ok:false,error:String(e)}));});})()"
-        webView.evaluateJavascript(js, null)
-        // Disposition only matters for the fallback name, which is resolved on receipt.
-        fallbackNames[nonce] = URLUtil.guessFileName(url, disposition, mime)
-    }
-
-    private val fallbackNames: MutableMap<String, String> = Collections.synchronizedMap(mutableMapOf())
-
-    private fun onMessage(message: WebMessageCompat) {
-        val text = message.data ?: return
-        thread {
-            try {
-                val json = JSONObject(text)
-                val nonce = json.optString("n")
-                if (!pendingNonces.remove(nonce)) return@thread // unknown or already used
-                val fallback = fallbackNames.remove(nonce) ?: "download"
-                if (!json.optBoolean("ok")) {
-                    toast("Download failed: ${json.optString("error")}")
-                    return@thread
-                }
-                val name = sanitize(json.optString("name")).ifEmpty { fallback }
-                save(Base64.getDecoder().decode(json.getString("b64")), json.optString("mime"), name)
-            } catch (e: Exception) {
-                Log.w(StMobileApp.LOG_TAG, "blob message rejected", e)
-            }
+        try {
+            val name = URLUtil.guessFileName(url, disposition, mime)
+            val req = DownloadManager.Request(Uri.parse(url))
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
+            mime?.takeIf { it.isNotBlank() }?.let { req.setMimeType(it) }
+            // An empty Cookie header is worse than none; only send what the WebView actually has.
+            CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let { req.addRequestHeader("Cookie", it) }
+            userAgent?.takeIf { it.isNotBlank() }?.let { req.addRequestHeader("User-Agent", it) }
+            app.getSystemService(DownloadManager::class.java).enqueue(req)
+            toast("Downloading $name")
+        } catch (e: Exception) {
+            Log.w(StMobileApp.LOG_TAG, "DownloadManager refused the download", e)
+            toast(BlobReceiver.FAILED)
         }
     }
 
-    private fun save(bytes: ByteArray, mime: String, name: String) {
+    private fun downloadBlob(webView: WebView, url: String, disposition: String?, mime: String?) {
+        val nonce = ByteArray(BlobReceiver.NONCE_BYTES).also(random::nextBytes).joinToString("") { "%02x".format(it) }
+        val fallback = URLUtil.guessFileName(url, disposition, mime)
+        // Queued before the script runs, so the page's "start" can never overtake it.
+        worker.execute {
+            receiver.expect(nonce, fallback)
+            ensureSweeping()
+        }
+        val binary = WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_ARRAY_BUFFER)
+        webView.evaluateJavascript(transferScript(url, nonce, mime.orEmpty(), binary), null)
+    }
+
+    /** The holder is being destroyed: abort open transfers (no partial file is left) and stop the worker. */
+    fun close() {
         try {
+            worker.execute { receiver.abortAll() }
+            worker.shutdown()
+        } catch (_: Exception) {
+        }
+    }
+
+    /** UI thread. Copies the message out, then parses and writes on [worker]. */
+    private fun onMessage(message: WebMessageCompat, reply: JavaScriptReplyProxy) {
+        try {
+            val bytes = if (message.type == WebMessageCompat.TYPE_ARRAY_BUFFER) message.arrayBuffer else null
+            val text = if (bytes == null) message.data ?: return else null
+            worker.execute {
+                val answer = try {
+                    if (bytes != null) receiver.onBinary(bytes) else receiver.onText(text!!)
+                } catch (t: Throwable) { // OutOfMemoryError included: never take the app down for a download
+                    Log.w(StMobileApp.LOG_TAG, "blob message failed", t)
+                    null
+                }
+                if (answer != null) handler.post { runCatching { reply.postMessage(answer) } }
+            }
+        } catch (t: Throwable) {
+            Log.w(StMobileApp.LOG_TAG, "blob message dropped", t)
+        }
+    }
+
+    /** Worker thread. Sweeps stalled transfers every few seconds while any download is open. */
+    private fun ensureSweeping() {
+        if (sweeper != null) return
+        sweeper = worker.scheduleWithFixedDelay({
+            try {
+                receiver.sweep()
+            } catch (t: Throwable) {
+                Log.w(StMobileApp.LOG_TAG, "blob sweep failed", t)
+            }
+            if (receiver.isIdle) {
+                sweeper?.cancel(false)
+                sweeper = null
+            }
+        }, SWEEP_MS, SWEEP_MS, TimeUnit.MILLISECONDS)
+    }
+
+    private fun toast(msg: String) {
+        handler.post { Toast.makeText(app, msg, Toast.LENGTH_LONG).show() }
+    }
+
+    /** A pending (IS_PENDING) item in Downloads, published on commit, deleted on abort. */
+    private class MediaStoreSink(private val resolver: ContentResolver) : DownloadSink {
+        override fun open(name: String, mime: String): DownloadSink.Output {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, name)
                 if (mime.isNotEmpty()) put(MediaStore.Downloads.MIME_TYPE, mime)
                 put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                 put(MediaStore.Downloads.IS_PENDING, 1)
             }
-            val resolver = activity.contentResolver
             val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 ?: error("MediaStore insert failed")
-            resolver.openOutputStream(uri)!!.use { it.write(bytes) }
-            resolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
-            toast("Saved $name to Downloads")
-        } catch (e: Exception) {
-            Log.w(StMobileApp.LOG_TAG, "blob save failed", e)
-            toast("Download failed: ${e.message}")
+            val stream: OutputStream = try {
+                resolver.openOutputStream(uri) ?: error("no output stream")
+            } catch (t: Throwable) {
+                runCatching { resolver.delete(uri, null, null) }
+                throw t
+            }
+            return object : DownloadSink.Output {
+                override fun write(bytes: ByteArray, offset: Int, length: Int) = stream.write(bytes, offset, length)
+
+                override fun commit() {
+                    stream.close()
+                    resolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
+                }
+
+                override fun abort() {
+                    runCatching { stream.close() }
+                    runCatching { resolver.delete(uri, null, null) }
+                }
+            }
         }
     }
 
-    private fun sanitize(name: String) = name.substringAfterLast('/').substringAfterLast('\\').trim()
-
-    private fun toast(msg: String) = handler.post { Toast.makeText(activity, msg, Toast.LENGTH_LONG).show() }
-
     companion object {
         private const val BRIDGE_NAME = "STMobileDownloads"
+        private const val CHUNK_BYTES = 1 shl 20
+        private const val SWEEP_MS = 5_000L
 
-        fun originOf(serverUrl: String): String? = try {
-            val u = URI(serverUrl.trim())
-            val port = if (u.port == -1) "" else ":${u.port}"
-            "${u.scheme}://${u.host}$port"
-        } catch (_: Exception) {
-            null
+        /**
+         * Reads the blob in [CHUNK_BYTES] slices and posts them one at a time, each after the app's
+         * `ack:<nonce>` (so at most one slice is in flight). [binary]: ArrayBuffer messages prefixed
+         * with the 16 nonce bytes; otherwise base64 JSON. A null/odd FileReader result or a failed
+         * fetch posts `fail`, and nothing is saved.
+         */
+        internal fun transferScript(url: String, nonce: String, mime: String, binary: Boolean): String {
+            val q = JSONObject::quote
+            return """(function(){
+var u=${q(url)},n=${q(nonce)},fm=${q(mime)},bin=$binary,B=$BRIDGE_NAME,CH=$CHUNK_BYTES;
+var names=window.__stmBlobNames,name=names&&names.get(u)||'';
+var nb=new Uint8Array(16);for(var i=0;i<16;i++)nb[i]=parseInt(n.substr(i*2,2),16);
+var b=null,off=0,dead=false;
+function post(o){B.postMessage(JSON.stringify(o));}
+function stop(){dead=true;B.removeEventListener('message',onReply);}
+function fail(e){if(dead)return;stop();post({n:n,t:'fail',error:String(e)});}
+function onReply(e){if(dead)return;if(e.data==='abort:'+n){stop();return;}if(e.data==='ack:'+n)next();}
+function next(){
+if(off>=b.size){stop();post({n:n,t:'done',size:b.size});return;}
+var p=b.slice(off,Math.min(off+CH,b.size));off+=p.size;
+if(bin){p.arrayBuffer().then(function(buf){if(dead)return;var m=new Uint8Array(16+buf.byteLength);m.set(nb,0);m.set(new Uint8Array(buf),16);B.postMessage(m.buffer);}).catch(fail);}
+else{var f=new FileReader();f.onload=function(){if(dead)return;var s=f.result;if(typeof s!=='string'||s.indexOf(',')<0){fail('read failed');return;}post({n:n,t:'chunk',b64:s.substring(s.indexOf(',')+1)});};f.onerror=function(){fail(f.error);};f.readAsDataURL(p);}
+}
+B.addEventListener('message',onReply);
+fetch(u).then(function(r){if(!r.ok)throw new Error('HTTP '+r.status);return r.blob();}).then(function(x){if(!x)throw new Error('no data');b=x;post({n:n,t:'start',size:b.size,mime:b.type||fm,name:name});}).catch(fail);
+})()"""
         }
 
         /**

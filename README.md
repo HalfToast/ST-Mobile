@@ -56,6 +56,9 @@ Put these four lines in `~/.gradle/gradle.properties` (never in the repo):
     STMOBILE_KEY_ALIAS=...
     STMOBILE_KEY_PASSWORD=...
 
+`STMOBILE_STORE_FILE` may start with `~/` (for example `~/keys/st-mobile.jks`); it is expanded to your home
+directory. Other paths are used as written, so give an absolute path.
+
 Create the keystore once with `keytool -genkeypair -keystore <file> -alias <alias> -keyalg RSA -keysize 4096 -validity 36500`
 and keep a backup: updates must be signed with the same key.
 

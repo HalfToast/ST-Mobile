@@ -5,6 +5,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
@@ -34,7 +35,9 @@ import java.security.PublicKey
 
 /**
  * Key-authenticated shell on the tablet. One connection is reused across calls and replaced when
- * it drops, when the host/port/user settings change, or when opening a session on it fails.
+ * it drops, when the host/port/user settings change, or when opening a session on it fails. It is
+ * closed after a minute without sessions and when the app goes to the background with nothing
+ * running; the next call reconnects.
  * Host keys are pinned (TOFU) in [AppSettings.knownHostKey] via [HostKeyPolicy].
  */
 class SshRemoteShell(private val settings: AppSettings, private val keys: KeyManager) : RemoteShell {
@@ -44,26 +47,48 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
     private val mutex = Mutex()
     @Volatile private var live: Live? = null
 
-    override suspend fun exec(command: String, stdin: String?, timeoutMs: Long): ExecResult =
+    /** Closes the connection after [IDLE_CLOSE_MS] without sessions, or on background (see [onAppBackground]). */
+    private val idle = IdleCloser(CoroutineScope(SupervisorJob() + Dispatchers.IO), IDLE_CLOSE_MS) { isIdle ->
+        withContext(NonCancellable) {
+            mutex.withLock {
+                if (!isIdle()) return@withLock
+                val old = live ?: return@withLock
+                live = null
+                old.client.closeQuietly()
+                android.util.Log.i(dev.halftoast.stmobile.StMobileApp.LOG_TAG, "SSH_IDLE_CLOSE")
+            }
+        }
+    }
+
+    /** The app went to the background: drop the connection now unless an action or stream is running. */
+    fun onAppBackground() = idle.onBackground()
+
+    override suspend fun exec(command: String, stdin: String?, timeoutMs: Long, signalOnCancel: Boolean): ExecResult =
         withContext(Dispatchers.IO) {
-            withSshTimeout(timeoutMs) {
-                val session = openSession()
-                try {
-                    runCommand(session, command, stdin)
-                } catch (e: CancellationException) {
-                    session.terminate() // timed out or cancelled: don't leave the command running
-                    throw e
-                } catch (e: IOException) {
-                    // Timed out or cancelled: interrupted reads surface as InterruptedIOException.
-                    // Keep the shared connection; withSshTimeout reports the timeout.
-                    if (!currentCoroutineContext().isActive) session.terminate()
-                    currentCoroutineContext().ensureActive()
-                    // Otherwise the connection died under us; the next call reconnects.
-                    discard()
-                    throw SshError.Unreachable("Lost the connection to the tablet", e)
-                } finally {
-                    session.closeQuietly()
+            idle.begin()
+            try {
+                withSshTimeout(timeoutMs) {
+                    val session = openSession()
+                    try {
+                        runCommand(session, command, stdin)
+                    } catch (e: CancellationException) {
+                        // Timed out or cancelled: stop the command, unless the caller wants it to finish.
+                        if (signalOnCancel) session.terminate()
+                        throw e
+                    } catch (e: IOException) {
+                        // Timed out or cancelled: interrupted reads surface as InterruptedIOException.
+                        // Keep the shared connection; withSshTimeout reports the timeout.
+                        if (!currentCoroutineContext().isActive && signalOnCancel) session.terminate()
+                        currentCoroutineContext().ensureActive()
+                        // Otherwise the connection died under us; the next call reconnects.
+                        discard()
+                        throw SshError.Unreachable("Lost the connection to the tablet", e)
+                    } finally {
+                        session.closeQuietly()
+                    }
                 }
+            } finally {
+                idle.end()
             }
         }
 
@@ -74,6 +99,15 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
      * after a plain channel close, so the signal is what stops e.g. `tail -f`.
      */
     override fun stream(command: String): Flow<String> = channelFlow {
+        idle.begin()
+        try {
+            streamLines(command)
+        } finally {
+            idle.end()
+        }
+    }.flowOn(Dispatchers.IO)
+
+    private suspend fun kotlinx.coroutines.channels.ProducerScope<String>.streamLines(command: String) {
         val session = openSession()
         try {
             val c = runInterruptible { session.exec(command) }
@@ -92,7 +126,7 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
             session.terminate()
             session.closeQuietly()
         }
-    }.flowOn(Dispatchers.IO)
+    }
 
     /**
      * Drops the cached connection. Suspends and runs on IO (sshj's disconnect writes to the socket;
@@ -216,6 +250,9 @@ internal class PolicyHostKeyVerifier(private val known: String?) : HostKeyVerifi
 
     override fun findExistingAlgorithms(hostname: String?, port: Int): List<String> = emptyList()
 }
+
+/** Close the shared connection after this long with no open session. */
+const val IDLE_CLOSE_MS = 60_000L
 
 internal object SshConnect {
     const val CONNECT_TIMEOUT_MS = 5_000

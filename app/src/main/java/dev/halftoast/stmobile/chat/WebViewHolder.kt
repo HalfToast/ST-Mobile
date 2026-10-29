@@ -1,23 +1,16 @@
 package dev.halftoast.stmobile.chat
 
 import android.annotation.SuppressLint
-import android.content.Intent
 import android.graphics.Bitmap
-import android.os.Message
-import android.app.DownloadManager
-import android.content.ContentValues
 import android.net.Uri
-import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.Message
 import android.os.SystemClock
-import android.provider.MediaStore
 import android.util.Log
 import android.view.ViewGroup
 import android.webkit.CookieManager
-import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
-import android.webkit.URLUtil
 import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
@@ -26,7 +19,6 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.Lifecycle
@@ -36,26 +28,23 @@ import dev.halftoast.stmobile.StMobileApp
 import dev.halftoast.stmobile.settings.AppSettings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
-import java.util.Base64
 import kotlin.concurrent.thread
 
-sealed interface ChatState {
-    data object Loading : ChatState
-    data object Ready : ChatState
-    /** SillyTavern's login page is showing; the user must sign in. Not an error. */
-    data object LoginRequired : ChatState
-    data class Unreachable(val reason: String) : ChatState
-}
-
-/** Owns the single SillyTavern WebView for the lifetime of the Activity. */
+/**
+ * Owns the single SillyTavern WebView for the lifetime of the Activity, and destroys it with the
+ * Activity. After [destroy], every entry point is a no-op and pending callbacks are dropped.
+ */
 class WebViewHolder(private val activity: ComponentActivity, private val appSettings: AppSettings) {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val downloads = Downloads(activity, mainHandler)
+    private val links = ExternalLinks(activity)
+
+    /** Origin the current WebView's page hooks were installed for. Read on Chromium IO threads too. */
+    @Volatile private var serverOrigin: String? = Origins.of(appSettings.serverUrl)
 
     var webView: WebView = createWebView()
         private set
@@ -70,14 +59,23 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
     private var navToken = 0
     private val resolvingAfterReady = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    private val readyCallbacks = mutableListOf<(Long) -> Unit>()
     private var parent: ViewGroup? = null
+    private var destroyed = false
     private var loadStartedAt = 0L
+    /** Bumped on every main-frame navigation, recreate, markServerDown and destroy; stale callbacks compare it. */
     private var loadGeneration = 0
+    /** Bumped every time Loading is entered; the ready deadline only fires for its own Loading. */
+    private var loadingEpoch = 0
     private var mainFrameFailed = false
+    /** The committed main frame is on [serverOrigin]; only then is readiness polled. */
+    private var onServerPage = false
     private var pollingGeneration = -1
     private var pendingHttpError: String? = null
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
+    /** Renderer crashes in the last [CRASH_WINDOW_MS], for the recreate+reload backoff. */
+    private val crashTimes = ArrayDeque<Long>()
+    /** Throwaway WebViews from onCreateWindow, destroyed once they reveal their URL or time out. */
+    private val popups = mutableSetOf<WebView>()
 
     private val multiPicker = activity.registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
         deliverFiles(it)
@@ -88,14 +86,22 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
 
     init {
         activity.lifecycle.addObserver(LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_PAUSE) CookieManager.getInstance().flush()
+            when (event) {
+                Lifecycle.Event.ON_PAUSE -> CookieManager.getInstance().flush()
+                // This holder belongs to this Activity instance; a recreated Activity (rare: the
+                // manifest handles config changes) builds its own, so the WebView never outlives it.
+                Lifecycle.Event.ON_DESTROY -> destroy()
+                else -> Unit
+            }
         })
         CookieManager.getInstance().setAcceptCookie(true)
         interceptor = ::serveFromAssetCache
-        webView.loadUrlTimed()
+        enterLoading()
+        loadUrlTimed()
     }
 
     fun attach(parent: ViewGroup) {
+        if (destroyed) return
         this.parent = parent
         (webView.parent as? ViewGroup)?.takeIf { it !== parent }?.removeView(webView)
         if (webView.parent == null) {
@@ -108,17 +114,16 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         parent = null
     }
 
-    /**
-     * Drops every cached asset and re-resolves the server revision, then reloads (call after a successful ST update).
-     */
-    fun revalidate() {
-        _state.value = ChatState.Loading
-        webView.loadUrlTimed(clearFirst = true)
+    fun reload() {
+        if (destroyed) return
+        enterLoading()
+        loadUrlTimed()
     }
 
-    fun reload() {
-        _state.value = ChatState.Loading
-        webView.loadUrlTimed()
+    /** The user's Retry: also forgets earlier renderer crashes. */
+    fun retry() {
+        crashTimes.clear()
+        reload()
     }
 
     /**
@@ -126,31 +131,23 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
      * nothing (a pending load and readiness polling are dropped); Retry or [reload] loads again.
      */
     fun markServerDown(reason: String) {
+        if (destroyed) return
         navToken++
         loadGeneration++
         webView.stopLoading()
         _state.value = ChatState.Unreachable(reason)
     }
 
-    /** Builds a fresh WebView after the renderer died. Does not reload; call [reload]. */
-    fun recreate() {
-        (webView.parent as? ViewGroup)?.removeView(webView)
-        webView.destroy()
-        webView = createWebView()
-        parent?.let { attach(it) }
-    }
-
-    /** Called every time the page finishes booting (preloader gone). */
-    fun onStReady(callback: (elapsedMs: Long) -> Unit) {
-        readyCallbacks += callback
+    /** The server URL changed: page hooks are bound to the old origin, so build a new WebView and load. */
+    fun onServerUrlChanged() {
+        if (destroyed) return
+        recreate()
+        reload()
     }
 
     /** Off-origin page in the WebView (e.g. OAuth provider) with history: step back instead of probing. */
     fun goBackIfOffOrigin(): Boolean {
-        val url = webView.url?.let(Uri::parse) ?: return false
-        val port = if (url.port == -1) "" else ":${url.port}"
-        val origin = "${url.scheme}://${url.host}$port"
-        if (origin.equals(Downloads.originOf(appSettings.serverUrl), ignoreCase = true) || !webView.canGoBack()) return false
+        if (destroyed || Origins.isOn(webView.url, serverOrigin) || !webView.canGoBack()) return false
         webView.goBack()
         return true
     }
@@ -159,37 +156,97 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
      * Back-press probe: counts open UI, closes the top dialog (ST closes popups on the native
      * `cancel` event, which a synthetic Escape keydown never produces) or else sends Escape to the
      * focused element, then re-counts 150 ms later.
-     * [result] receives true when something closed.
+     * [result] receives true when something closed; false also if the page doesn't answer within 1 s.
      */
     fun probeBack(result: (consumedByPage: Boolean) -> Unit) {
-        webView.evaluateJavascript(
+        if (destroyed) return
+        val view = webView
+        var answered = false
+        fun answer(consumed: Boolean) {
+            if (answered) return
+            answered = true
+            result(consumed)
+        }
+        mainHandler.postDelayed({ answer(false) }, PROBE_BACK_TIMEOUT_MS)
+        view.evaluateJavascript(
             "(function(){var n=document.querySelectorAll('$OPEN_UI_SELECTOR').length;" +
                 "var d=document.querySelectorAll('dialog[open]'),t=d[d.length-1];if(t){t.dispatchEvent(new Event('cancel',{cancelable:true}));}else{(document.activeElement||document).dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));}return n;})()",
         ) { beforeRaw ->
             val before = beforeRaw?.toIntOrNull() ?: 0
             mainHandler.postDelayed({
-                webView.evaluateJavascript("document.querySelectorAll('$OPEN_UI_SELECTOR').length") { afterRaw ->
+                if (destroyed || view !== webView) return@postDelayed answer(false)
+                view.evaluateJavascript("document.querySelectorAll('$OPEN_UI_SELECTOR').length") { afterRaw ->
                     val after = afterRaw?.toIntOrNull() ?: before
-                    result(after < before)
+                    answer(after < before)
                 }
             }, 150)
         }
     }
 
+    /** Builds a fresh WebView (renderer died, server URL changed). Does not load; call [reload]. */
+    private fun recreate() {
+        navToken++
+        loadGeneration++
+        cancelFileChooser()
+        destroyView(webView)
+        serverOrigin = Origins.of(appSettings.serverUrl)
+        webView = createWebView()
+        parent?.let { attach(it) }
+    }
+
+    private fun destroy() {
+        if (destroyed) return
+        destroyed = true
+        navToken++
+        loadGeneration++
+        loadingEpoch++
+        mainHandler.removeCallbacksAndMessages(null)
+        cancelFileChooser()
+        popups.toList().forEach(::destroyView)
+        popups.clear()
+        destroyView(webView)
+        downloads.close()
+        parent = null
+        Log.i(StMobileApp.LOG_TAG, "WEBVIEW_DESTROYED")
+    }
+
+    private fun destroyView(view: WebView) {
+        (view.parent as? ViewGroup)?.removeView(view)
+        view.stopLoading()
+        view.destroy()
+    }
+
+    private fun cancelFileChooser() {
+        filePathCallback?.onReceiveValue(null)
+        filePathCallback = null
+    }
+
+    /** Shows the snapshot overlay and arms the ready deadline: Loading never outlasts [READY_TIMEOUT_MS]. */
+    private fun enterLoading() {
+        _state.value = ChatState.Loading
+        val epoch = ++loadingEpoch
+        mainHandler.postDelayed({
+            if (!destroyed && epoch == loadingEpoch && _state.value == ChatState.Loading) {
+                Log.i(StMobileApp.LOG_TAG, "READY_TIMEOUT: showing the page as it is")
+                _state.value = ChatState.Stalled
+            }
+        }, READY_TIMEOUT_MS)
+    }
+
     private fun cacheDisabled() = BuildConfig.DEBUG && appSettings.debugDisableAssetCache
 
     /** Resolves the cache namespace (off the main thread, total wait capped), then loads. */
-    private fun WebView.loadUrlTimed(clearFirst: Boolean = false) {
+    private fun loadUrlTimed() {
         val serverUrl = appSettings.serverUrl
         val token = ++navToken
+        pendingHttpError = null
         thread(name = "st-version") {
-            if (clearFirst) assetCache.clear()
             val start = SystemClock.elapsedRealtime()
             val revision = if (cacheDisabled()) null else resolveRevision(serverUrl)
             assetCache.setRevision(revision)
             Log.i(StMobileApp.LOG_TAG, "VERSION_WAIT ms=${SystemClock.elapsedRealtime() - start} revision=${revision ?: "null"}")
             mainHandler.post {
-                if (token == navToken) this@WebViewHolder.webView.loadUrl(serverUrl)
+                if (!destroyed && token == navToken) webView.loadUrl(serverUrl)
             }
         }
     }
@@ -240,15 +297,15 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
     private fun cookieHeader(url: String): String? =
         CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }
 
-    /** Runs on Chromium IO threads. Null means "let the WebView fetch it". */
+    /** Runs on Chromium IO threads. Null means "let the WebView fetch it". Only the server's own assets. */
     private fun serveFromAssetCache(request: WebResourceRequest): WebResourceResponse? {
         if (cacheDisabled()) return null
         val rev = assetCache.revision ?: return null
         val uri = request.url
-        if (uri.scheme != "http" && uri.scheme != "https") return null
+        val url = uri.toString()
+        if (!Origins.isOn(url, serverOrigin)) return null // never cache or forward cookies to another site
         if (!request.method.equals("GET", ignoreCase = true) || request.requestHeaders.containsKey("Range")) return null
         if (!AssetCachePolicy.shouldCache("GET", uri.path ?: return null)) return null
-        val url = uri.toString()
         assetCache.get(url)?.let { return WebResourceResponse(it.mime, it.encoding, it.bytes.inputStream()) }
         return try {
             val conn = URL(url).openConnection() as HttpURLConnection
@@ -275,27 +332,37 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         }
     }
 
+    private fun isCurrent(gen: Int, view: WebView) = !destroyed && gen == loadGeneration && view === webView
+
+    /**
+     * Polls for SillyTavern's UI on a server page. Keeps polling after the ready deadline (Stalled),
+     * more slowly, so a slow boot still ends up Ready; gives up after [POLL_GIVE_UP_MS].
+     */
     private fun startReadyPolling() {
         val gen = loadGeneration
         if (pollingGeneration == gen) return
         pollingGeneration = gen
         val view = webView
-        val deadline = SystemClock.elapsedRealtime() + READY_TIMEOUT_MS
+        val giveUpAt = SystemClock.elapsedRealtime() + POLL_GIVE_UP_MS
         lateinit var poll: Runnable
         poll = Runnable {
-            if (gen != loadGeneration || view !== webView) return@Runnable
+            if (!isCurrent(gen, view)) return@Runnable
             view.evaluateJavascript(READY_PROBE) { r ->
-                if (gen != loadGeneration || view !== webView) return@evaluateJavascript
+                if (!isCurrent(gen, view)) return@evaluateJavascript
                 when (r) {
                     "\"ready\"" -> {
                         val elapsed = SystemClock.elapsedRealtime() - loadStartedAt
                         Log.i(StMobileApp.LOG_TAG, "ST_READY ms=$elapsed")
                         _state.value = ChatState.Ready
                         resolveRevisionAfterReady()
-                        readyCallbacks.toList().forEach { it(elapsed) }
                     }
                     "\"login\"" -> _state.value = ChatState.LoginRequired
-                    else -> if (SystemClock.elapsedRealtime() < deadline) mainHandler.postDelayed(poll, POLL_INTERVAL_MS)
+                    else -> {
+                        val st = _state.value
+                        if ((st == ChatState.Loading || st == ChatState.Stalled) && SystemClock.elapsedRealtime() < giveUpAt) {
+                            mainHandler.postDelayed(poll, if (st == ChatState.Stalled) STALLED_POLL_MS else POLL_INTERVAL_MS)
+                        }
+                    }
                 }
             }
         }
@@ -307,7 +374,72 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         filePathCallback = null
     }
 
-    @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
+    /** Renderer died. Recreate and reload, at most [MAX_CRASH_RELOADS] times per [CRASH_WINDOW_MS]. */
+    private fun onRendererGone(view: WebView, crashed: Boolean) {
+        if (view !== webView) { // a popup's renderer
+            popups.remove(view)
+            destroyView(view)
+            return
+        }
+        val now = SystemClock.elapsedRealtime()
+        crashTimes.addLast(now)
+        while (crashTimes.isNotEmpty() && now - crashTimes.first() > CRASH_WINDOW_MS) crashTimes.removeFirst()
+        recreate()
+        if (crashTimes.size > MAX_CRASH_RELOADS) {
+            Log.w(StMobileApp.LOG_TAG, "renderer gone (crashed=$crashed) ${crashTimes.size}x in 60 s; giving up")
+            _state.value = ChatState.Unreachable("The page keeps crashing")
+        } else {
+            Log.w(StMobileApp.LOG_TAG, "renderer gone (crashed=$crashed), recreating")
+            reload()
+        }
+    }
+
+    /**
+     * target=_blank / window.open. The URL is only known once the new window navigates, so it gets a
+     * throwaway WebView that is destroyed as soon as it reveals the URL, when the page closes it, or
+     * after [POPUP_TIMEOUT_MS] (window.open() with no URL never navigates). Nothing loads in the main
+     * WebView: http(s) goes to the browser like a new Chrome tab, other schemes to their app.
+     */
+    private fun openNewWindow(resultMsg: Message) {
+        val popup = WebView(activity)
+        popups += popup
+        var done = false
+        fun finish() {
+            if (done) return
+            done = true
+            mainHandler.post {
+                if (popups.remove(popup)) destroyView(popup)
+            }
+        }
+        fun handle(uri: Uri) {
+            if (done || uri.scheme.equals("about", ignoreCase = true)) return // the blank start page
+            links.open(uri, LinkPolicy.forNewWindow(uri.toString()))
+            finish()
+        }
+        popup.webViewClient = object : WebViewClient() {
+            override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
+                handle(request.url)
+                return true
+            }
+
+            override fun onPageStarted(v: WebView, url: String?, favicon: Bitmap?) {
+                url?.let { handle(Uri.parse(it)) }
+            }
+
+            override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                onRendererGone(view, detail.didCrash())
+                return true
+            }
+        }
+        popup.webChromeClient = object : WebChromeClient() {
+            override fun onCloseWindow(window: WebView) = finish()
+        }
+        (resultMsg.obj as WebView.WebViewTransport).webView = popup
+        resultMsg.sendToTarget()
+        mainHandler.postDelayed({ finish() }, POPUP_TIMEOUT_MS)
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
     private fun createWebView(): WebView = WebView(activity).apply {
         settings.apply {
             javaScriptEnabled = true
@@ -319,28 +451,44 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         }
         CookieManager.getInstance().setAcceptCookie(true)
-        downloads.install(this, appSettings.serverUrl)
+        downloads.install(this, serverOrigin)
 
         webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                 interceptor?.invoke(request)
 
+            /** Same-window http(s) stays here (Ruling 10); mailto:, tel:, intent: … go to their app. */
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                if (!request.isForMainFrame) return false
+                val target = LinkPolicy.forMainFrame(request.url.toString()) ?: return false
+                links.open(request.url, target)
+                return true
+            }
+
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                if (view !== webView) return
                 loadGeneration++
                 mainFrameFailed = false
                 loadStartedAt = SystemClock.elapsedRealtime()
-                // onReceivedHttpError fires before the navigation commits; keep its verdict.
+                onServerPage = Origins.isOn(url, serverOrigin)
+                // onReceivedHttpError fires before the navigation commits; take its verdict once.
                 val refused = pendingHttpError
-                if (refused != null) {
-                    mainFrameFailed = true
-                    _state.value = ChatState.Unreachable(refused)
-                } else {
-                    _state.value = ChatState.Loading
+                pendingHttpError = null
+                when {
+                    // Another site (OAuth sign-in): shown as is, no overlay, no readiness polling.
+                    !onServerPage -> _state.value = ChatState.External
+                    refused != null -> {
+                        mainFrameFailed = true
+                        _state.value = ChatState.Unreachable(refused)
+                    }
+                    else -> enterLoading()
                 }
             }
 
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
-                if (!request.isForMainFrame || response.statusCode < 400) return
+                if (view !== webView || !request.isForMainFrame || response.statusCode < 400) return
+                // Another site's error page is its own business; it shows as External.
+                if (!Origins.isOn(request.url.toString(), serverOrigin)) return
                 mainFrameFailed = true
                 val code = response.statusCode
                 val hint = when (code) {
@@ -354,49 +502,29 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
+                if (view !== webView) return
                 CookieManager.getInstance().flush() // persist the login session promptly
                 pendingHttpError = null
-                if (!mainFrameFailed) startReadyPolling()
+                if (!mainFrameFailed && onServerPage && Origins.isOn(url, serverOrigin)) startReadyPolling()
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) {
-                    mainFrameFailed = true
-                    _state.value = ChatState.Unreachable(error.description?.toString() ?: "Unknown error")
-                }
+                if (view !== webView || !request.isForMainFrame) return
+                // Off-origin failures show the WebView's own error page; Back returns to SillyTavern.
+                if (!Origins.isOn(request.url.toString(), serverOrigin)) return
+                mainFrameFailed = true
+                _state.value = ChatState.Unreachable(error.description?.toString() ?: "Unknown error")
             }
 
             override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
-                Log.w(StMobileApp.LOG_TAG, "renderer gone (crashed=${detail.didCrash()}), recreating")
-                this@WebViewHolder.recreate()
-                this@WebViewHolder.reload()
+                onRendererGone(view, detail.didCrash())
                 return true
             }
         }
 
         webChromeClient = object : WebChromeClient() {
-            /** target=_blank / window.open: never open a second WebView; hand the URL to the browser. */
             override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
-                val popup = WebView(activity)
-                var handled = false
-                fun handle(uri: Uri) {
-                    if (handled || uri.scheme == "about") return
-                    handled = true
-                    if (!openExternallyIfForeign(uri)) view.loadUrl(uri.toString()) // same origin: stay here
-                    mainHandler.post { popup.destroy() }
-                }
-                popup.webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
-                        handle(request.url)
-                        return true
-                    }
-
-                    override fun onPageStarted(v: WebView, url: String?, favicon: Bitmap?) {
-                        url?.let { handle(Uri.parse(it)) }
-                    }
-                }
-                (resultMsg.obj as WebView.WebViewTransport).webView = popup
-                resultMsg.sendToTarget()
+                openNewWindow(resultMsg)
                 return true
             }
 
@@ -415,7 +543,6 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
                 } catch (e: Exception) {
                     Log.w(StMobileApp.LOG_TAG, "file chooser failed", e)
                     deliverFiles(emptyList())
-                    return false
                 }
                 return true
             }
@@ -424,21 +551,6 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             downloads.onDownloadStart(this, url, userAgent, contentDisposition, mimeType)
         }
-    }
-
-    /** True (and launches the default browser) for http(s) URLs outside the server origin. */
-    private fun openExternallyIfForeign(uri: Uri): Boolean {
-        val scheme = uri.scheme?.lowercase()
-        if (scheme != "http" && scheme != "https") return false // blob:, data:, etc. untouched
-        val port = if (uri.port == -1) "" else ":${uri.port}"
-        val origin = "$scheme://${uri.host}$port"
-        if (origin.equals(Downloads.originOf(appSettings.serverUrl), ignoreCase = true)) return false
-        try {
-            activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
-        } catch (e: Exception) {
-            Log.w(StMobileApp.LOG_TAG, "no browser for $uri", e)
-        }
-        return true
     }
 
     /** SAF wants MIME types; ST sends extensions like ".png" too. */
@@ -455,7 +567,13 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         const val VERSION_TIMEOUT_MS = 5_000
         const val FETCH_TIMEOUT_MS = 15_000
         const val POLL_INTERVAL_MS = 200L
+        const val STALLED_POLL_MS = 1_000L
         const val READY_TIMEOUT_MS = 60_000L
+        const val POLL_GIVE_UP_MS = 300_000L
+        const val PROBE_BACK_TIMEOUT_MS = 1_000L
+        const val POPUP_TIMEOUT_MS = 10_000L
+        const val MAX_CRASH_RELOADS = 3
+        const val CRASH_WINDOW_MS = 60_000L
         const val OPEN_UI_SELECTOR = ".openDrawer, dialog[open], #dialogue_popup:not([style*=\"none\"]), " +
             "#character_popup:not([style*=\"none\"]), #select_chat_popup:not([style*=\"none\"])"
     }

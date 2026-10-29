@@ -3,7 +3,13 @@ package dev.halftoast.stmobile.panel
 import dev.halftoast.stmobile.ssh.ExecResult
 import dev.halftoast.stmobile.ssh.RemoteShell
 import dev.halftoast.stmobile.ssh.SshError
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -41,6 +47,10 @@ private const val OFFLINE = "online=0\nbranch=staging\ncommit=ad29cbda6\nbehind=
 /** Records every exec; answers dashboard/whitelist probes and stpanel subcommands with canned output. */
 class FakeRemoteShell : RemoteShell {
     val commands = mutableListOf<String>()
+    /** Commands that ran to the end (their delay elapsed without cancellation). */
+    val completed = mutableListOf<String>()
+    /** signalOnCancel per command, in call order. */
+    val signals = mutableListOf<Pair<String, Boolean>>()
     private val calls = mutableListOf<Triple<String, String?, Long>>()
     var delayMs = 0L
     /** Extra delay for `stpanel` commands only. */
@@ -57,13 +67,15 @@ class FakeRemoteShell : RemoteShell {
     fun stdinFor(prefix: String): String? = calls.firstOrNull { it.first.contains(prefix) }?.second
     fun timeoutFor(prefix: String): Long? = calls.firstOrNull { it.first.contains(prefix) }?.third
 
-    override suspend fun exec(command: String, stdin: String?, timeoutMs: Long): ExecResult {
+    override suspend fun exec(command: String, stdin: String?, timeoutMs: Long, signalOnCancel: Boolean): ExecResult {
         commands += command
+        signals += command to signalOnCancel
         calls += Triple(command, stdin, timeoutMs)
         if (command == DASHBOARD_CMD) dashboardCalls++
         if (delayMs > 0) delay(delayMs)
         if (actionDelayMs > 0 && command.startsWith("stpanel")) delay(actionDelayMs)
         failure?.let { throw it }
+        completed += command
         val out = when {
             command == DASHBOARD_CMD -> next(dashboards)
             command == WHITELIST_CMD -> next(whitelists)
@@ -102,7 +114,7 @@ class PanelViewModelTest {
     private lateinit var shell: FakeRemoteShell
     private lateinit var probes: FakeProbes
     private lateinit var vm: PanelViewModel
-    private var updatedCalls = 0
+    private lateinit var actions: ActionTracker
     private var restartedCalls = 0
     private var dashboardCallsAtRestart = -1
     private val downReasons = mutableListOf<String>()
@@ -111,11 +123,15 @@ class PanelViewModelTest {
         Dispatchers.setMain(StandardTestDispatcher())
         shell = FakeRemoteShell()
         probes = FakeProbes()
-        vm = PanelViewModel(shell, probes, onUpdated = { updatedCalls++ }, onServerRestarted = {
-            restartedCalls++
-            dashboardCallsAtRestart = shell.dashboardCalls
-        }, onServerDown = { downReasons += it })
+        // Stands in for StMobileApp.appScope; on the test Main dispatcher, so runTest drives it.
+        actions = ActionTracker(CoroutineScope(SupervisorJob() + Dispatchers.Main))
+        vm = newVm()
     }
+
+    private fun newVm() = PanelViewModel(shell, probes, actions, onServerRestarted = {
+        restartedCalls++
+        dashboardCallsAtRestart = shell.dashboardCalls
+    }, onServerDown = { downReasons += it })
 
     @After fun tearDown() = Dispatchers.resetMain()
 
@@ -126,7 +142,14 @@ class PanelViewModelTest {
     @Test fun cleanFeedsYes() = runTest { vm.request(PanelAction.CleanCache); vm.confirm(); advanceUntilIdle(); assertEquals("y\n", shell.stdinFor("stpanel clean")) }
     @Test fun whitelistAddFeedsChoiceAndIp() = runTest { vm.addWhitelistEntry("192.168.1.50"); advanceUntilIdle(); assertEquals("2\n192.168.1.50\n", shell.stdinFor("stpanel whitelist")); assertTrue(vm.ui.value.restartSuggested) }
     @Test fun whitelistRejectsBadIpWithoutRunning() = runTest { vm.addWhitelistEntry("1.2.3.4\"); x"); advanceUntilIdle(); assertTrue(shell.commands.none { it.contains("whitelist") && it.contains("stpanel") }); assertNotNull(vm.ui.value.error) }
-    @Test fun updateClearsCacheOnSuccess() = runTest { vm.request(PanelAction.Update); vm.confirm(); advanceUntilIdle(); assertEquals(1, updatedCalls); assertTrue(vm.ui.value.restartSuggested) }
+    @Test fun updateSuggestsRestartButNeverReloadsChat() = runTest {
+        // Ruling 27: a working chat is never reloaded by Update; the suggested Restart does that.
+        vm.request(PanelAction.Update); vm.confirm(); advanceUntilIdle()
+        assertTrue(vm.ui.value.restartSuggested)
+        assertEquals(0, restartedCalls)
+        assertTrue(downReasons.isEmpty())
+        assertEquals(ActionResult.Ok("Updated to 123456789"), vm.ui.value.lastAction)
+    }
     @Test fun shellFailureShowsErrorAndReenablesActions() = runTest { shell.failWith(SshError.Unreachable("no route")); vm.request(PanelAction.Backup); advanceUntilIdle(); assertNull(vm.ui.value.busy); assertNotNull(vm.ui.value.error) }
     @Test fun secondActionIgnoredWhileBusy() = runTest { shell.delayMs = 1_000; vm.request(PanelAction.Backup); vm.request(PanelAction.Restart); advanceUntilIdle(); assertEquals(1, shell.commands.count { it.contains("stpanel") }) }
     @Test fun pollsOnlyWhileVisible() = runTest { vm.setVisible(true); advanceTimeBy(11_000); val n = shell.dashboardCalls; vm.setVisible(false); advanceTimeBy(20_000); assertEquals(n, shell.dashboardCalls); assertTrue(n in 2..3) }
@@ -162,10 +185,10 @@ class PanelViewModelTest {
         assertEquals(60_000L, shell.timeoutFor("stpanel clean"))
     }
 
-    @Test fun updateAlreadyUpToDateNeitherRevalidatesNorSuggestsRestart() = runTest {
+    @Test fun updateAlreadyUpToDateDoesNotSuggestRestart() = runTest {
         shell.updateOutput = "Already up to date.\n"
         vm.request(PanelAction.Update); vm.confirm(); advanceUntilIdle()
-        assertEquals(0, updatedCalls)
+        assertEquals(0, restartedCalls)
         assertFalse(vm.ui.value.restartSuggested)
         assertEquals(ActionResult.Ok("Already up to date"), vm.ui.value.lastResult)
     }
@@ -490,6 +513,66 @@ class PanelViewModelTest {
     @Test fun restartSuccessMarksChatDownThenReloadsOnce() = runTest {
         // Even if the server is already serving by the post-refresh, the old page belongs to a dead process.
         vm.request(PanelAction.Restart); advanceUntilIdle()
+        assertEquals(listOf("SillyTavern is restarting"), downReasons)
+        assertEquals(1, restartedCalls)
+    }
+
+    // --- Final review: I2 (Ruling 28) ---
+
+    @Test fun actionsNeverAskTheShellToSignal() = runTest {
+        vm.request(PanelAction.Backup); advanceUntilIdle()
+        vm.request(PanelAction.Update); vm.confirm(); advanceUntilIdle()
+        vm.request(PanelAction.Restart); advanceUntilIdle()
+        vm.addWhitelistEntry("10.0.0.1"); advanceUntilIdle()
+        val stpanel = shell.signals.filter { it.first.startsWith("stpanel") }
+        assertEquals(4, stpanel.size)
+        assertTrue(stpanel.all { !it.second })
+        // Read-only probes still TERM on cancel.
+        assertTrue(shell.signals.filter { it.first == DASHBOARD_CMD }.all { it.second })
+    }
+
+    @Test fun actionKeepsRunningAfterViewModelIsCleared() = runTest {
+        shell.actionDelayMs = 30_000
+        val store = ViewModelStore()
+        val first = ViewModelProvider.create(store, viewModelFactory { initializer { newVm() } })[PanelViewModel::class]
+        first.request(PanelAction.Update); first.confirm()
+        advanceTimeBy(5_000)
+        assertEquals(PanelAction.Update, first.ui.value.busy)
+        store.clear() // Activity finished: viewModelScope is cancelled
+        advanceUntilIdle()
+        assertTrue("stpanel update" in shell.completed)
+        assertTrue(shell.signals.single { it.first == "stpanel update" }.second.not())
+    }
+
+    @Test fun newViewModelAdoptsActionInFlight() = runTest {
+        shell.actionDelayMs = 30_000
+        val store = ViewModelStore()
+        val first = ViewModelProvider.create(store, viewModelFactory { initializer { newVm() } })[PanelViewModel::class]
+        first.request(PanelAction.Backup)
+        advanceTimeBy(5_000)
+        store.clear()
+        runCurrent()
+        assertNull(first.ui.value.busy) // its scope really was cancelled (finish's finally ran)…
+        assertTrue("stpanel backup" !in shell.completed) // …while the backup itself is still running
+        val second = newVm()
+        assertEquals(PanelAction.Backup, second.ui.value.busy) // buttons stay disabled
+        assertFalse(second.ui.value.actionsEnabled)
+        advanceUntilIdle()
+        assertNull(second.ui.value.busy)
+        assertEquals(ActionResult.Ok("Backup created, 12M"), second.ui.value.lastAction)
+        assertEquals(1, shell.commands.count { it == "stpanel backup" })
+    }
+
+    @Test fun restartAdoptedByNewViewModelStillReloadsChat() = runTest {
+        shell.actionDelayMs = 10_000
+        val store = ViewModelStore()
+        val first = ViewModelProvider.create(store, viewModelFactory { initializer { newVm() } })[PanelViewModel::class]
+        first.request(PanelAction.Restart)
+        advanceTimeBy(1_000)
+        store.clear()
+        runCurrent()
+        newVm()
+        advanceUntilIdle()
         assertEquals(listOf("SillyTavern is restarting"), downReasons)
         assertEquals(1, restartedCalls)
     }

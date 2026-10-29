@@ -7,6 +7,11 @@ import android.graphics.Canvas
 import android.view.View
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -14,6 +19,11 @@ import java.util.concurrent.Executors
 object Snapshot {
     private const val FILE_NAME = "last_screen.jpg"
     private val io = Executors.newSingleThreadExecutor()
+    private val ioDispatcher = io.asCoroutineDispatcher()
+
+    private val _cleared = MutableStateFlow(0)
+    /** Bumped by [clear]. Key anything holding a loaded bitmap on it, so a cleared snapshot is never shown. */
+    val cleared: StateFlow<Int> = _cleared
 
     private fun file(context: Context) = File(context.cacheDir, FILE_NAME)
 
@@ -40,12 +50,18 @@ object Snapshot {
         }
     }
 
-    fun load(context: Context): Bitmap? {
+    /** Decodes off the main thread, on the save/clear executor so it sees every earlier save or clear. */
+    suspend fun load(context: Context): Bitmap? = withContext(ioDispatcher) {
         val f = file(context)
-        return if (f.exists()) BitmapFactory.decodeFile(f.path) else null
+        try {
+            if (f.exists()) BitmapFactory.decodeFile(f.path) else null
+        } catch (_: Throwable) {
+            null
+        }
     }
 
     fun clear(context: Context) {
+        _cleared.update { it + 1 } // drop any bitmap on screen now, before the file is gone
         val target = file(context)
         // Same executor as save, so the delete is ordered after any queued save.
         io.execute {

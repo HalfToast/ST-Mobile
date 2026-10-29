@@ -96,13 +96,18 @@ internal fun isCoveredBy(ip: String, entries: List<String>): Boolean = entries.a
 }
 
 /**
- * Control Center state. Activity-scoped: actions run in [viewModelScope] so a Backup or Update
- * keeps going across tab switches and backgrounding (cancelling exec would TERM the remote command).
+ * Control Center state. Activity-scoped. Commands that change the server run in [actions]' app-wide
+ * scope with `signalOnCancel = false` (Ruling 28): nothing UI-bound can cancel them, and even a timeout
+ * only closes the channel instead of sending TERM to a half-done restart or update. This ViewModel
+ * awaits the result to update busy state and the result line; a new instance adopts an action that is
+ * still running.
  *
  * Probes never run under an action (Ruling 22): a failing probe can drop the shared SSH connection,
  * and the dashboard probe's background `git fetch` could race `git pull`.
  *
- * @param onUpdated called after an Update that changed the code; wired to WebViewHolder.revalidate().
+ * An Update that changed the code only suggests a Restart (Ruling 27): it never reloads Chat. The
+ * asset cache is namespaced by `<pkgVersion>@<gitRevision>`, so the next load after the restart uses fresh files.
+ *
  * @param onServerRestarted called once when a fresh dashboard shows the server serving again after a
  *   Start/Restart or after the server was seen down (also if it was started outside the app); wired to
  *   WebViewHolder.reload() so the Chat tab recovers.
@@ -115,7 +120,7 @@ internal fun isCoveredBy(ip: String, entries: List<String>): Boolean = entries.a
 class PanelViewModel(
     private val shell: RemoteShell,
     private val probes: ProbeSource,
-    private val onUpdated: () -> Unit,
+    private val actions: ActionTracker,
     private val onServerRestarted: () -> Unit = {},
     private val onServerDown: (String) -> Unit = {},
 ) : ViewModel() {
@@ -135,6 +140,14 @@ class PanelViewModel(
     private var reloadPending = false
     /** [onServerDown] was called and the server hasn't been seen serving since. */
     private var downNotified = false
+
+    init {
+        // Recreated while an action runs (it outlives the old ViewModel): show it as busy and take its result.
+        actions.inFlight()?.let { flight ->
+            _ui.update { it.copy(busy = flight.action) }
+            viewModelScope.launch { finish(flight) }
+        }
+    }
 
     /** Polls the dashboard every [POLL_MS] while true. The screen sets it from tab visibility and lifecycle. */
     fun setVisible(visible: Boolean) {
@@ -294,7 +307,8 @@ class PanelViewModel(
     private suspend fun execWhitelist(stdin: String, interpret: (String) -> ActionResult.Ok?) {
         probeLock.withLock { } // don't start under an in-flight probe
         val result = try {
-            val r = shell.exec(Probes.action("whitelist"), stdin, ACTION_TIMEOUT_MS)
+            val command = Probes.action("whitelist")
+            val r = actions.runDetached { shell.exec(command, stdin, ACTION_TIMEOUT_MS, signalOnCancel = false) }
             stpanelMissing(r) ?: interpret(stripAnsi(r.stdout)) ?: ActionResult.Failed(
                 "Whitelist not changed" + (firstLine(r.stderr)?.let { ": $it" } ?: ""),
             )
@@ -321,29 +335,41 @@ class PanelViewModel(
     private fun run(action: PanelAction) {
         _ui.update { it.copy(busy = action) }
         viewModelScope.launch {
-            var result: ActionResult = ActionResult.Failed("${action.label} failed")
-            try {
+            val flight = try {
                 probeLock.withLock { } // don't start under an in-flight probe
                 val stdin = if (action == PanelAction.CleanCache) "y\n" else null
                 val timeout = if (action == PanelAction.Update || action == PanelAction.Backup) LONG_TIMEOUT_MS else ACTION_TIMEOUT_MS
-                result = try {
-                    val r = shell.exec(Probes.action(action.subcommand), stdin, timeout)
-                    stpanelMissing(r) ?: interpret(action, r)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    showError(e)
-                    ActionResult.Failed("${action.label} failed: ${describe(e)}")
-                }
-                _ui.update { it.copy(lastResult = result, lastAction = result) }
-                if (result is ActionResult.Ok) afterSuccess(action, result)
-                // Still busy here, so no poll can interleave; polling resumes after this.
-                refreshNow(force = true)
-            } finally {
+                val command = Probes.action(action.subcommand)
+                actions.start(action) { shell.exec(command, stdin, timeout, signalOnCancel = false) }
+            } catch (e: CancellationException) {
                 _ui.update { it.copy(busy = null) }
+                throw e
             }
-            if (reloadPending) startAwaitServing()
+            finish(flight)
         }
+    }
+
+    /** Awaits a running action (started here or by an earlier ViewModel), then reports and refreshes. */
+    private suspend fun finish(flight: ActionTracker.InFlight) {
+        val action = flight.action
+        try {
+            val result = try {
+                val r = flight.result.await()
+                stpanelMissing(r) ?: interpret(action, r)
+            } catch (e: CancellationException) {
+                throw e // this ViewModel is gone; the action itself keeps running
+            } catch (e: Exception) {
+                showError(e)
+                ActionResult.Failed("${action.label} failed: ${describe(e)}")
+            }
+            _ui.update { it.copy(lastResult = result, lastAction = result) }
+            if (result is ActionResult.Ok) afterSuccess(action, result)
+            // Still busy here, so no poll can interleave; polling resumes after this.
+            refreshNow(force = true)
+        } finally {
+            _ui.update { it.copy(busy = null) }
+        }
+        if (reloadPending) startAwaitServing()
     }
 
     private fun interpret(action: PanelAction, r: ExecResult): ActionResult = when (action) {
@@ -366,10 +392,8 @@ class PanelViewModel(
 
     private fun afterSuccess(action: PanelAction, result: ActionResult.Ok) {
         when (action) {
-            PanelAction.Update -> if (result.message != UP_TO_DATE) {
-                onUpdated()
-                _ui.update { it.copy(restartSuggested = true) }
-            }
+            // New code runs only after a restart; suggest one. Never reload Chat here (Ruling 27).
+            PanelAction.Update -> if (result.message != UP_TO_DATE) _ui.update { it.copy(restartSuggested = true) }
             PanelAction.Start -> {
                 _ui.update { it.copy(restartSuggested = false) }
                 reloadPending = true

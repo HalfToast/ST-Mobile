@@ -52,6 +52,9 @@ import dev.halftoast.stmobile.chat.ChatScreen
 import dev.halftoast.stmobile.chat.ChatState
 import dev.halftoast.stmobile.chat.Snapshot
 import dev.halftoast.stmobile.chat.WebViewHolder
+import dev.halftoast.stmobile.chat.backProbesPage
+import dev.halftoast.stmobile.chat.isLiveServerPage
+import dev.halftoast.stmobile.chat.reloadWhenServerBack
 import dev.halftoast.stmobile.keepalive.KeepAliveService
 import dev.halftoast.stmobile.panel.AndroidProbeSource
 import dev.halftoast.stmobile.panel.PanelScreen
@@ -90,13 +93,11 @@ class MainActivity : ComponentActivity() {
                 PanelViewModel(
                     shell = app.remoteShell,
                     probes = AndroidProbeSource(app, app.settings),
-                    onUpdated = { currentHolder.get()?.revalidate() },
-                    // Never reload a working page: that would kill a generation in progress.
+                    actions = app.actions,
+                    // Never reload a working or loading page, or a sign-in on another site: only
+                    // Unreachable / Stalled (a reload would kill a generation in progress).
                     onServerRestarted = {
-                        currentHolder.get()?.let { h ->
-                            val st = h.state.value
-                            if (st != ChatState.Ready && st != ChatState.LoginRequired) h.reload()
-                        }
+                        currentHolder.get()?.let { h -> if (h.state.value.reloadWhenServerBack) h.reload() }
                     },
                     onServerDown = { reason -> currentHolder.get()?.markServerDown(reason) },
                 )
@@ -124,7 +125,8 @@ class MainActivity : ComponentActivity() {
             holder.state.collect {
                 if (it == ChatState.LoginRequired) Snapshot.clear(applicationContext)
                 // A live page (chat or login) means the server is back for Chat; tell the Panel.
-                if (it == ChatState.Ready || it == ChatState.LoginRequired) panelVm.onChatReady()
+                // Not External (another site says nothing about the server) and not Stalled.
+                if (it.isLiveServerPage) panelVm.onChatReady()
             }
         }
         setContent {
@@ -149,7 +151,7 @@ class MainActivity : ComponentActivity() {
                             shell = app.remoteShell,
                             onClose = { overlay = Overlay.None },
                             onRerunSetup = { overlay = Overlay.Setup },
-                            onServerUrlChanged = { holder.reload() },
+                            onServerUrlChanged = { holder.onServerUrlChanged() },
                         )
                     }
                     Overlay.Setup -> {
@@ -170,7 +172,7 @@ class MainActivity : ComponentActivity() {
                                 onComplete = { urlChanged ->
                                     setupDone = true
                                     overlay = Overlay.Settings
-                                    if (urlChanged) holder.reload()
+                                    if (urlChanged) holder.onServerUrlChanged()
                                 },
                                 onCancel = { overlay = Overlay.Settings },
                                 allowTrust = true,
@@ -222,7 +224,7 @@ class MainActivity : ComponentActivity() {
                                 shell = app.remoteShell,
                                 onComplete = { urlChanged ->
                                     setupDone = true
-                                    if (urlChanged) holder.reload()
+                                    if (urlChanged) holder.onServerUrlChanged()
                                 },
                                 onOpenSettings = { overlay = Overlay.Settings },
                                 modifier = content,
@@ -280,18 +282,23 @@ class MainActivity : ComponentActivity() {
 
     private fun handleChatBack() {
         if (holder.goBackIfOffOrigin()) return
-        holder.probeBack { consumed ->
-            val now = SystemClock.elapsedRealtime()
-            when (BackPressPolicy.decide(consumed, lastUnconsumedBackAtMs, now)) {
-                BackAction.ConsumedByPage -> lastUnconsumedBackAtMs = null
-                BackAction.ShowPressAgainHint -> {
-                    lastUnconsumedBackAtMs = now
-                    Toast.makeText(this, "Press back again to leave", Toast.LENGTH_SHORT).show()
-                }
-                BackAction.MoveTaskToBack -> {
-                    lastUnconsumedBackAtMs = null
-                    moveTaskToBack(true)
-                }
+        // Unreachable, Loading, Stalled, External: the page is hidden or isn't SillyTavern's UI, so
+        // don't poke it; plain back (history above, then "press again").
+        if (!holder.state.value.backProbesPage) return onBackDecided(consumed = false)
+        holder.probeBack(::onBackDecided)
+    }
+
+    private fun onBackDecided(consumed: Boolean) {
+        val now = SystemClock.elapsedRealtime()
+        when (BackPressPolicy.decide(consumed, lastUnconsumedBackAtMs, now)) {
+            BackAction.ConsumedByPage -> lastUnconsumedBackAtMs = null
+            BackAction.ShowPressAgainHint -> {
+                lastUnconsumedBackAtMs = now
+                Toast.makeText(this, "Press back again to leave", Toast.LENGTH_SHORT).show()
+            }
+            BackAction.MoveTaskToBack -> {
+                lastUnconsumedBackAtMs = null
+                moveTaskToBack(true)
             }
         }
     }
