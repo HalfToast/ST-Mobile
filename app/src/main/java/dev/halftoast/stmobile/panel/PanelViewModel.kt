@@ -318,15 +318,11 @@ class PanelViewModel(
             showError(e)
             ActionResult.Failed("Whitelist not changed: ${describe(e)}")
         }
-        val text = when (result) {
-            is ActionResult.Ok -> result.message
-            is ActionResult.Failed -> result.message
-        }
         _ui.update {
             it.copy(
                 lastResult = result,
                 lastAction = result,
-                whitelistMessage = text,
+                whitelistMessage = result.message,
                 restartSuggested = it.restartSuggested || result is ActionResult.Ok,
             )
         }
@@ -358,6 +354,9 @@ class PanelViewModel(
                 stpanelMissing(r) ?: interpret(action, r)
             } catch (e: CancellationException) {
                 throw e // this ViewModel is gone; the action itself keeps running
+            } catch (_: SshError.Timeout) {
+                // Actions run detached (Probes.wrapDetached), so giving up here doesn't stop it.
+                ActionResult.StillRunning("${action.label} is taking a while and keeps running on the tablet. Check the dashboard later.")
             } catch (e: Exception) {
                 showError(e)
                 ActionResult.Failed("${action.label} failed: ${describe(e)}")

@@ -318,19 +318,13 @@ private fun androidx.compose.foundation.layout.RowScope.ActionButton(
 @Composable
 private fun LastActionLine(r: ActionResult) {
     Text(
-        "Last action: ${r.text}",
+        "Last action: ${r.message}",
         style = MaterialTheme.typography.bodyMedium,
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
         color = if (r is ActionResult.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
     )
 }
-
-private val ActionResult.text: String
-    get() = when (this) {
-        is ActionResult.Ok -> message
-        is ActionResult.Failed -> message
-    }
 
 @Composable
 private fun BusySpinner() = CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)

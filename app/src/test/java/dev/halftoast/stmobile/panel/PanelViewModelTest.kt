@@ -70,6 +70,8 @@ class FakeRemoteShell : RemoteShell {
     var whitelists = mutableListOf(WL_OFF)
     var updateOutput = "Updating ad29cbda6..1234567890ab\nFast-forward\n"
     private var failure: Exception? = null
+    /** Thrown by `stpanel` commands only, so probes keep answering. */
+    var actionFailure: Exception? = null
 
     fun failWith(e: Exception?) { failure = e }
     fun stdinFor(prefix: String): String? = calls.firstOrNull { it.first.contains(prefix) }?.second
@@ -85,6 +87,7 @@ class FakeRemoteShell : RemoteShell {
         if (delayMs > 0) delay(delayMs)
         if (actionDelayMs > 0 && cmd.startsWith("stpanel")) delay(actionDelayMs)
         failure?.let { throw it }
+        if (cmd.startsWith("stpanel")) actionFailure?.let { throw it }
         completed += cmd
         val out = when {
             cmd == DASHBOARD_CMD -> next(dashboards)
@@ -167,6 +170,16 @@ class PanelViewModelTest {
         assertEquals(ActionResult.Ok("Updated to 123456789"), vm.ui.value.lastAction)
     }
     @Test fun shellFailureShowsErrorAndReenablesActions() = runTest { shell.failWith(SshError.Unreachable("no route")); vm.request(PanelAction.Backup); advanceUntilIdle(); assertNull(vm.ui.value.busy); assertNotNull(vm.ui.value.error) }
+    @Test fun actionTimeoutSaysItKeepsRunningOnTheTablet() = runTest {
+        shell.actionFailure = SshError.Timeout()
+        vm.request(PanelAction.Backup); advanceUntilIdle()
+        assertEquals(
+            ActionResult.StillRunning("Backup is taking a while and keeps running on the tablet. Check the dashboard later."),
+            vm.ui.value.lastAction,
+        )
+        assertNull(vm.ui.value.error)
+        assertNull(vm.ui.value.busy)
+    }
     @Test fun secondActionIgnoredWhileBusy() = runTest { shell.delayMs = 1_000; vm.request(PanelAction.Backup); vm.request(PanelAction.Restart); advanceUntilIdle(); assertEquals(1, shell.commands.count { it.contains("stpanel") }) }
     @Test fun pollsOnlyWhileVisible() = runTest { vm.setVisible(true); advanceTimeBy(11_000); val n = shell.dashboardCalls; vm.setVisible(false); advanceTimeBy(20_000); assertEquals(n, shell.dashboardCalls); assertTrue(n in 2..3) }
 

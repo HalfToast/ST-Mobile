@@ -35,6 +35,9 @@ data class CharacterStat(val name: String, val messages: Int, val lastActiveEpoc
 data class WhitelistState(val enabled: Boolean, val entries: List<String>)
 
 sealed interface ActionResult {
-    data class Ok(val message: String) : ActionResult
-    data class Failed(val message: String) : ActionResult
+    val message: String
+    data class Ok(override val message: String) : ActionResult
+    data class Failed(override val message: String) : ActionResult
+    /** The app stopped waiting (timeout) but the detached command keeps running on the tablet. */
+    data class StillRunning(override val message: String) : ActionResult
 }
