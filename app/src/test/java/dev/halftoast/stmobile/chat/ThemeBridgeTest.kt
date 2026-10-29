@@ -22,4 +22,12 @@ class ThemeBridgeTest {
         StTheme.CSS_VARS.forEach { assertTrue(it, s.contains(it)) }
         assertTrue(s.contains("/login")); assertTrue(s.contains("MutationObserver"))
     }
+
+    @Test fun watcherPostsOnlyChangedThemes() {
+        val s = ThemeBridge.readAndWatchScript()
+        // The last posted (or first returned) JSON is remembered, and an unchanged read is not posted.
+        assertTrue(s.contains("window.__stmThemeSent=j"))
+        assertTrue(s.contains("if(j===window.__stmThemeSent)return;"))
+        assertTrue("throttle kept", s.contains("300-(Date.now()-last)"))
+    }
 }

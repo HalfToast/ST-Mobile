@@ -35,7 +35,8 @@ object ThemeBridge {
 
     /**
      * Evaluates to the theme JSON string (null on the login page). Also installs, once per page, a
-     * MutationObserver on the root element that re-posts the theme, at most once per 300 ms.
+     * MutationObserver on the root element that re-posts the theme, at most once per 300 ms, and only
+     * when it differs from what the app last got (ST touches the root's style for unrelated reasons).
      */
     fun readAndWatchScript(): String {
         val vars = JSONArray(StTheme.CSS_VARS).toString()
@@ -46,14 +47,14 @@ function read(){var cs=getComputedStyle(document.documentElement),o={};for(var i
 if(!window.__stmThemeWatch){
 window.__stmThemeWatch=true;
 var last=0,timer=null;
-function send(){timer=null;last=Date.now();try{$NAME.postMessage(read());}catch(e){}}
+function send(){timer=null;last=Date.now();var j=read();if(j===window.__stmThemeSent)return;window.__stmThemeSent=j;try{$NAME.postMessage(j);}catch(e){}}
 new MutationObserver(function(){
 if(timer!==null)return;
 var wait=300-(Date.now()-last);
 if(wait<=0)send();else timer=setTimeout(send,wait);
 }).observe(document.documentElement,{attributes:true,attributeFilter:['style','class']});
 }
-return read();
+var j=read();window.__stmThemeSent=j;return j;
 })()"""
     }
 

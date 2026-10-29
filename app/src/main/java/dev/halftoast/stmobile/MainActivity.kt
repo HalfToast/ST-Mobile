@@ -42,6 +42,9 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
@@ -61,6 +64,7 @@ import dev.halftoast.stmobile.chat.reloadWhenServerBack
 import dev.halftoast.stmobile.keepalive.KeepAliveService
 import dev.halftoast.stmobile.logs.LogsScreen
 import dev.halftoast.stmobile.nav.FloatingNav
+import dev.halftoast.stmobile.nav.navHidden
 import dev.halftoast.stmobile.nav.icon
 import dev.halftoast.stmobile.panel.AndroidProbeSource
 import dev.halftoast.stmobile.panel.PanelScreen
@@ -151,6 +155,10 @@ class MainActivity : ComponentActivity() {
                 // Chat works without SSH; Panel, Stats and Logs show Setup until it's done.
                 var setupDone by rememberSaveable { mutableStateOf(settings.setupComplete) }
                 var fab by remember { mutableStateOf(settings.fabPosition) }
+                // Read only inside FloatingNav's placement and event code, never during composition.
+                var chatSize by remember { mutableStateOf(IntSize.Zero) }
+                val imeTarget = WindowInsets.imeAnimationTarget
+                val density = LocalDensity.current
                 SideEffect { chatTabShown = screen == Screen.Chat && overlay == Overlay.None }
                 BackHandler {
                     when {
@@ -197,7 +205,12 @@ class MainActivity : ComponentActivity() {
                     Overlay.None -> if (screen == Screen.Chat) {
                         // The dark background is what shows while the WebView already has its final
                         // height and the keyboard is still sliding (no light strip).
-                        Box(Modifier.fillMaxSize().background(Color(palette.background))) {
+                        Box(
+                            Modifier
+                                .fillMaxSize()
+                                .background(Color(palette.background))
+                                .onSizeChanged { chatSize = it },
+                        ) {
                             ChatScreen(
                                 holder = holder,
                                 onOpenControlCenter = { screen = Screen.Panel },
@@ -209,6 +222,8 @@ class MainActivity : ComponentActivity() {
                             )
                             FloatingNav(
                                 position = fab,
+                                containerSize = { chatSize },
+                                hidden = { navHidden(imeTarget.getBottom(density), sheetOpen = false) },
                                 onMoved = {
                                     fab = it
                                     settings.fabPosition = it
