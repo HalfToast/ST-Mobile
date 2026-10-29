@@ -134,12 +134,13 @@ fun PanelScreen(
     }
     if (showWhitelist) {
         WhitelistDialog(
-            state = ui.whitelist,
-            busy = ui.whitelistBusy,
-            enabled = ui.actionsEnabled,
+            ui = ui,
+            onRetry = vm::loadWhitelist,
             onToggle = vm::toggleWhitelist,
+            onConfirmToggle = vm::confirmWhitelistToggle,
+            onDismissToggle = vm::dismissWhitelistToggle,
             onAdd = vm::addWhitelistEntry,
-            onClose = { showWhitelist = false },
+            onClose = { showWhitelist = false; vm.dismissWhitelistToggle() },
         )
     }
 }

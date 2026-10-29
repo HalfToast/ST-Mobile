@@ -33,25 +33,34 @@ import androidx.compose.ui.unit.dp
 
 /**
  * Whitelist mode switch, the allowed entries, and an add field validated live with [isValidIpOrCidr].
- * stpanel has no "remove", so entries are read-only here.
+ * stpanel has no "remove", so entries are read-only here. The switch only asks for a toggle
+ * ([onToggle]); the change runs after the confirmation dialog.
  */
 @Composable
 fun WhitelistDialog(
-    state: WhitelistState?,
-    busy: Boolean,
-    enabled: Boolean,
+    ui: PanelUi,
+    onRetry: () -> Unit,
     onToggle: () -> Unit,
+    onConfirmToggle: () -> Unit,
+    onDismissToggle: () -> Unit,
     onAdd: (String) -> Unit,
     onClose: () -> Unit,
 ) {
     var input by rememberSaveable { mutableStateOf("") }
     val entry = input.trim()
     val valid = isValidIpOrCidr(entry)
+    val state = ui.whitelist
+    val loadError = ui.whitelistError
     AlertDialog(
         onDismissRequest = onClose,
         title = { Text("Whitelist") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (loadError != null) {
+                    Text(loadError, color = MaterialTheme.colorScheme.error)
+                    Button(onClick = onRetry) { Text("Retry") }
+                    return@Column
+                }
                 if (state == null) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
@@ -69,10 +78,13 @@ fun WhitelistDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (busy) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    if (ui.whitelistLoading || ui.whitelistBusy) {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    }
                     Spacer(Modifier.width(8.dp))
-                    Switch(checked = state.enabled, onCheckedChange = { onToggle() }, enabled = enabled)
+                    Switch(checked = state.enabled, onCheckedChange = { onToggle() }, enabled = ui.whitelistToggleEnabled)
                 }
+                ui.whitelistMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
                 HorizontalDivider()
                 Text("Allowed addresses (${state.entries.size})", style = MaterialTheme.typography.titleSmall)
                 Column(Modifier.heightIn(max = 200.dp).verticalScroll(rememberScrollState())) {
@@ -94,11 +106,21 @@ fun WhitelistDialog(
                 )
                 Button(
                     onClick = { onAdd(entry); input = "" },
-                    enabled = valid && enabled,
+                    enabled = valid && ui.actionsEnabled,
                     modifier = Modifier.fillMaxWidth(),
                 ) { Text("Add") }
             }
         },
         confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
     )
+
+    ui.pendingWhitelistToggle?.let { p ->
+        AlertDialog(
+            onDismissRequest = onDismissToggle,
+            title = { Text(if (p.enable) "Turn whitelist mode on?" else "Turn whitelist mode off?") },
+            text = { Text(p.warning + " The change applies after SillyTavern restarts.") },
+            confirmButton = { TextButton(onClick = onConfirmToggle) { Text(if (p.enable) "Turn on" else "Turn off") } },
+            dismissButton = { TextButton(onClick = onDismissToggle) { Text("Cancel") } },
+        )
+    }
 }

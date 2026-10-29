@@ -234,7 +234,13 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        panelVm.setAppForeground(true)
+    }
+
     override fun onStop() {
+        panelVm.setAppForeground(false)
         if (chatTabShown && holder.state.value == ChatState.Ready) {
             Snapshot.save(this, holder.webView)
         }
