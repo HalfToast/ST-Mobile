@@ -458,4 +458,39 @@ class PanelViewModelTest {
         assertNull(vm.ui.value.lastResult)
         assertEquals(ActionResult.Ok("Backup created, 12M"), vm.ui.value.lastAction)
     }
+
+    // --- Fix round 3 ---
+
+    @Test fun chatReadyAfterDownMeansNoReloadOnServingPoll() = runTest {
+        // Stopped, restarted outside the app, user tapped Retry and Chat is Ready: don't reload a working chat.
+        shell.dashboards = mutableListOf(OFFLINE, ONLINE)
+        vm.refresh(); advanceUntilIdle()
+        assertEquals(1, downReasons.size)
+        vm.onChatReady()
+        vm.refresh(); advanceUntilIdle()
+        assertEquals(0, restartedCalls)
+    }
+
+    @Test fun servingPollWhileChatStillUnreachableReloadsOnce() = runTest {
+        shell.dashboards = mutableListOf(OFFLINE, ONLINE)
+        vm.refresh(); advanceUntilIdle()
+        repeat(3) { vm.refresh(); advanceUntilIdle() }
+        assertEquals(1, restartedCalls)
+    }
+
+    @Test fun chatReadyCancelsPendingStartReload() = runTest {
+        shell.dashboards = mutableListOf(OFFLINE)
+        vm.request(PanelAction.Start); runCurrent()
+        vm.onChatReady() // Chat recovered on its own (e.g. Retry) before the Panel saw the server serving
+        shell.dashboards = mutableListOf(ONLINE)
+        advanceUntilIdle()
+        assertEquals(0, restartedCalls)
+    }
+
+    @Test fun restartSuccessMarksChatDownThenReloadsOnce() = runTest {
+        // Even if the server is already serving by the post-refresh, the old page belongs to a dead process.
+        vm.request(PanelAction.Restart); advanceUntilIdle()
+        assertEquals(listOf("SillyTavern is restarting"), downReasons)
+        assertEquals(1, restartedCalls)
+    }
 }

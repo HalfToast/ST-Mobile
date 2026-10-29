@@ -1,8 +1,5 @@
 package dev.halftoast.stmobile.panel
 
-import android.util.Log
-import dev.halftoast.stmobile.BuildConfig
-import dev.halftoast.stmobile.StMobileApp
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -34,7 +31,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -291,10 +287,7 @@ private fun androidx.compose.foundation.layout.RowScope.ActionButton(
 ) {
     val destructive = action == PanelAction.Stop
     FilledTonalButton(
-        onClick = {
-            if (BuildConfig.DEBUG) Log.i(StMobileApp.LOG_TAG, "panel tap $action enabled=${ui.actionsEnabled} busy=${ui.busy}")
-            onClick(action)
-        },
+        onClick = { onClick(action) },
         enabled = enabled && ui.actionsEnabled,
         modifier = Modifier.weight(1f),
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),

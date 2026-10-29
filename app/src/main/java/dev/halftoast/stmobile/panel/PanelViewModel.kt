@@ -166,6 +166,19 @@ class PanelViewModel(
         }
     }
 
+    /**
+     * The Chat page finished loading against a live server (however it got there, e.g. its own
+     * Retry). Nothing left to recover: drop a pending down/Start reload so a later serving poll
+     * doesn't reload a working chat (and kill a generation in progress).
+     */
+    fun onChatReady() {
+        downNotified = false
+        reloadPending = false
+        servingTriesLeft = 0
+        awaitServingJob?.cancel()
+        awaitServingJob = null
+    }
+
     fun refresh() {
         viewModelScope.launch { refreshNow() }
     }
@@ -357,8 +370,15 @@ class PanelViewModel(
                 onUpdated()
                 _ui.update { it.copy(restartSuggested = true) }
             }
-            PanelAction.Start, PanelAction.Restart -> {
+            PanelAction.Start -> {
                 _ui.update { it.copy(restartSuggested = false) }
+                reloadPending = true
+            }
+            PanelAction.Restart -> {
+                _ui.update { it.copy(restartSuggested = false) }
+                // The loaded page belongs to the old process: show Unreachable until the new one serves,
+                // then reload (the reload callback skips a Chat that is Ready).
+                markDown("SillyTavern is restarting")
                 reloadPending = true
             }
             PanelAction.Stop -> markDown(STOPPED)

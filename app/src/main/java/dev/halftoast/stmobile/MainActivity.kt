@@ -87,7 +87,13 @@ class MainActivity : ComponentActivity() {
                     shell = app.remoteShell,
                     probes = AndroidProbeSource(app, app.settings),
                     onUpdated = { currentHolder.get()?.revalidate() },
-                    onServerRestarted = { currentHolder.get()?.reload() },
+                    // Never reload a working page: that would kill a generation in progress.
+                    onServerRestarted = {
+                        currentHolder.get()?.let { h ->
+                            val st = h.state.value
+                            if (st != ChatState.Ready && st != ChatState.LoginRequired) h.reload()
+                        }
+                    },
                     onServerDown = { reason -> currentHolder.get()?.markServerDown(reason) },
                 )
             }
@@ -102,7 +108,11 @@ class MainActivity : ComponentActivity() {
         currentHolder = WeakReference(holder)
         if (settings.keepAliveEnabled) KeepAliveService.start(this) else KeepAliveService.stop(this)
         lifecycleScope.launch {
-            holder.state.collect { if (it == ChatState.LoginRequired) Snapshot.clear(applicationContext) }
+            holder.state.collect {
+                if (it == ChatState.LoginRequired) Snapshot.clear(applicationContext)
+                // A live page (chat or login) means the server is back for Chat; tell the Panel.
+                if (it == ChatState.Ready || it == ChatState.LoginRequired) panelVm.onChatReady()
+            }
         }
         setContent {
             MaterialTheme {
