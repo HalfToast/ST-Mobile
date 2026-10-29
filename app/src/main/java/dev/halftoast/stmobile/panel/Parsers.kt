@@ -51,10 +51,10 @@ fun userDirMissingMessage(userDir: String?): String =
 fun parseStats(raw: String): List<CharacterStat> =
     stripAnsi(raw).lineSequence().mapNotNull { line ->
         val p = line.trimEnd('\r').split('\t')
-        if (p.size != 3) return@mapNotNull null
+        if (p.size != 3 && p.size != 4) return@mapNotNull null
         val m = p[1].trim().toIntOrNull() ?: return@mapNotNull null
         val t = p[2].trim().toLongOrNull() ?: return@mapNotNull null
-        CharacterStat(p[0], m, t)
+        CharacterStat(p[0], m, t, p.getOrNull(3)?.trim()?.ifEmpty { null })
     }.toList().sortedByDescending { it.lastActiveEpochSec }
 
 fun parseWhitelist(raw: String): WhitelistState {

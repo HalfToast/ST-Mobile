@@ -30,7 +30,7 @@ data class DashboardState(
     val userDirMissing: Boolean = false,
 )
 
-data class CharacterStat(val name: String, val messages: Int, val lastActiveEpochSec: Long)
+data class CharacterStat(val name: String, val messages: Int, val lastActiveEpochSec: Long, val avatarFile: String? = null)
 
 data class WhitelistState(val enabled: Boolean, val entries: List<String>)
 

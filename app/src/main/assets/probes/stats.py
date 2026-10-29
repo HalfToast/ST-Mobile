@@ -1,5 +1,5 @@
 # Read-only stats probe: stpanel character_stats_browser logic (lines 274-351), user dir from ST_USER.
-# Prints name\tmessages\tlast_active_epoch for all characters, newest first.
+# Prints name\tmessages\tlast_active_epoch\tavatar_png_file (empty if none) for all characters, newest first.
 import os, json, glob, datetime, re
 
 st_dir = "/data/data/com.termux/files/home/SillyTavern"
@@ -29,11 +29,17 @@ if os.path.exists(stats_file):
 
 all_chars = {}
 if os.path.exists(chars_dir):
-    for f in os.listdir(chars_dir):
+    for f in sorted(os.listdir(chars_dir)):
         if f.endswith((".png", ".json")):
             name = os.path.splitext(f)[0]
             k = name.lower()
+            if k in all_chars:
+                # Both foo.png and foo.json exist: the .png is the avatar.
+                if f.endswith(".png"):
+                    all_chars[k]["avatar"] = f
+                continue
             all_chars[k] = {
+                "avatar": f if f.endswith(".png") else "",
                 "name": name,
                 "messages": stats.get(k, {}).get("messages", 0),
                 "words": stats.get(k, {}).get("words", 0),
@@ -82,4 +88,4 @@ for k, v in all_chars.items():
 
 sorted_chars = sorted(all_chars.values(), key=lambda x: x["last_active"], reverse=True)
 for c in sorted_chars:
-    print("%s\t%d\t%d" % (c["name"].replace("\t", " ").replace("\n", " "), c["messages"], int(c["last_active"])))
+    print("%s\t%d\t%d\t%s" % (c["name"].replace("\t", " ").replace("\n", " "), c["messages"], int(c["last_active"]), c["avatar"].replace("\t", " ").replace("\n", " ")))

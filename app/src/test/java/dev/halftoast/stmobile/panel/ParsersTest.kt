@@ -106,4 +106,10 @@ class ParsersTest {
         assertEquals(Probes.wrapDetached("stpanel start"), Probes.action("start"))
         assertEquals("stpanel status", unwrapDetached(Probes.action("status")))
     }
+
+    @Test fun statsWithAvatarColumn() {
+        val s = parseStats("Seraphina\t77\t1793250000\tSeraphina.png\nDante\t1\t1793000000\t\n")
+        assertEquals(CharacterStat("Seraphina", 77, 1793250000, "Seraphina.png"), s[0]); assertNull(s[1].avatarFile)
+        assertEquals(1, parseStats("Old\t3\t5\n").size) // 3-field lines still parse
+    }
 }

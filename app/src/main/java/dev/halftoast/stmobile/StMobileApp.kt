@@ -12,6 +12,8 @@ import dev.halftoast.stmobile.settings.AppSettings
 import dev.halftoast.stmobile.ssh.AndroidKeystoreWrapper
 import dev.halftoast.stmobile.ssh.KeyManager
 import dev.halftoast.stmobile.ssh.SshRemoteShell
+import dev.halftoast.stmobile.stats.AvatarCache
+import dev.halftoast.stmobile.stats.httpAvatarFetch
 import dev.halftoast.stmobile.ui.ThemeStore
 import org.bouncycastle.jce.provider.BouncyCastleProvider
 import kotlinx.coroutines.CoroutineScope
@@ -41,6 +43,9 @@ class StMobileApp : Application() {
 
     /** The SillyTavern theme the native screens follow; persisted so it applies before the web UI loads. */
     val themeStore by lazy { ThemeStore({ settings.stThemeJson }, { settings.stThemeJson = it }) }
+
+    /** Character avatars fetched from ST's thumbnail endpoint, shared by every screen. */
+    val avatars by lazy { AvatarCache(200, httpAvatarFetch { settings.serverUrl }) }
 
     override fun onCreate() {
         super.onCreate()
