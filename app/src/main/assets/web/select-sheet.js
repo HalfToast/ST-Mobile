@@ -123,6 +123,13 @@
     empty = dlg.querySelector('.stm-empty');
     foot = dlg.querySelector('.stm-foot');
 
+    // Taps inside the sheet stay inside it: ST's page-level outside-click handlers
+    // ($('html').on('touchstart mousedown')) would otherwise collapse the drawer behind the sheet.
+    // The native dialog sends the page no events at all. Our own handlers sit on this root or below.
+    ['touchstart', 'touchmove', 'touchend', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'click']
+      .forEach(function (type) {
+        dlg.addEventListener(type, function (e) { e.stopPropagation(); });
+      });
     dlg.addEventListener('pointerdown', function () { armed = true; }, true);
     dlg.addEventListener('click', onClick);
     dlg.addEventListener('cancel', function (e) { e.preventDefault(); close(); });

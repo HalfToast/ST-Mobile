@@ -222,6 +222,40 @@
         source.removeChild(o);
       });
     },
+    sheetTapsDoNotReachPageHandlers: function () {
+      // ST closes unpinned drawers from $('html').on('touchstart mousedown') and other bubble-phase handlers.
+      var leaked = [];
+      var types = ['touchstart', 'touchmove', 'touchend', 'mousedown', 'mouseup', 'pointerdown', 'pointerup', 'click'];
+      function rec(e) { if (e.target.closest && e.target.closest('#stm-select-sheet')) leaked.push(e.type); }
+      types.forEach(function (t) {
+        document.addEventListener(t, rec);
+        document.documentElement.addEventListener(t, rec);
+      });
+      function fullTap(el) {
+        ['pointerdown', 'touchstart', 'touchend', 'pointerup'].forEach(function (t) {
+          el.dispatchEvent(new Event(t, { bubbles: true }));
+        });
+        el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+        el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+        el.click();
+      }
+      try {
+        source.value = 'openai';
+        down(source);
+        fullTap(rowByText('Cohere'));
+        eq(source.value, 'cohere', 'value');
+        eq(events, ['input', 'change'], 'events');
+        down(source);
+        fullTap(q('.stm-dim'));
+        ok(!sheet(), 'closed by dim');
+        eq(leaked, [], 'events that reached document/html');
+      } finally {
+        types.forEach(function (t) {
+          document.removeEventListener(t, rec);
+          document.documentElement.removeEventListener(t, rec);
+        });
+      }
+    },
     brokenOpenFallsBack: function () {
       var thrown = false;
       Element.prototype.appendChild = function () {
