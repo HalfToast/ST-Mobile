@@ -1,0 +1,264 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>select-sheet tests</title>
+<script src="../../main/assets/web/select-sheet.js"></script>
+<style>
+  body { background: rgb(24,24,27); color: rgb(195,195,195); font-family: sans-serif; padding: 16px; }
+  select { display: block; width: 100%; margin: 6px 0 18px; padding: 8px; font-size: 16px; }
+</style>
+</head>
+<body>
+<div id="fixtures">
+  <div>
+    <h4>Chat Completion Source</h4>
+    <select id="chat_completion_source">
+      <optgroup>
+        <option value="openai">OpenAI</option>
+        <option value="custom">Custom (OpenAI-compatible)</option>
+      </optgroup>
+      <optgroup>
+        <option value="ai21">AI21</option>
+        <option value="aimlapi">AI/ML API</option>
+        <option value="azure_openai">Azure OpenAI</option>
+        <option value="chutes">Chutes</option>
+        <option value="claude">Claude</option>
+        <option value="cloudflare">Cloudflare Workers AI</option>
+        <option value="cohere">Cohere</option>
+        <option value="deepseek">DeepSeek</option>
+      </optgroup>
+    </select>
+  </div>
+  <div>
+    <label for="yes_no">Yes/No</label>
+    <select id="yes_no"><option value="yes">Yes</option><option value="no">No</option></select>
+  </div>
+  <div>
+    <small>Letters</small>
+    <select id="letters" multiple>
+      <option value="a">a</option><option value="b">b</option><option value="c">c</option>
+    </select>
+  </div>
+  <div>
+    <select id="named_groups" aria-label="Named groups">
+      <optgroup label="Fruit"><option value="apple">Apple</option></optgroup>
+      <optgroup label="Veg"><option value="leek" disabled>Leek</option><option value="kale">Kale</option></optgroup>
+    </select>
+  </div>
+  <select id="size_four" size="4"><option>1</option><option>2</option><option>3</option><option>4</option></select>
+  <select id="disabled_select" disabled><option>x</option></select>
+</div>
+<script>
+(function () {
+  var source = document.getElementById('chat_completion_source');
+  var yesNo = document.getElementById('yes_no');
+  var letters = document.getElementById('letters');
+  var named = document.getElementById('named_groups');
+  var sizeFour = document.getElementById('size_four');
+  var disabled = document.getElementById('disabled_select');
+  var fixtures = document.getElementById('fixtures');
+
+  var events = [];
+  ['input', 'change'].forEach(function (type) {
+    document.addEventListener(type, function (e) {
+      if (fixtures.contains(e.target)) events.push(e.type);
+    }, true);
+  });
+
+  function down(el) {
+    var ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    el.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  }
+  // A real tap: the pointer goes down inside the sheet, then the click.
+  function tap(el) {
+    el.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+    el.click();
+  }
+  function sheet() { return document.querySelector('#stm-select-sheet.stm-open'); }
+  function q(sel) { return document.querySelector('#stm-select-sheet ' + sel); }
+  function visibleRows() {
+    return Array.prototype.filter.call(document.querySelectorAll('#stm-select-sheet .stm-row'), function (r) {
+      return !r.hidden;
+    });
+  }
+  function rowByText(text) {
+    return visibleRows().filter(function (r) { return r.textContent.trim() === text; })[0];
+  }
+  function eq(actual, expected, what) {
+    var a = JSON.stringify(actual), e = JSON.stringify(expected);
+    if (a !== e) throw new Error(what + ': expected ' + e + ', got ' + a);
+  }
+  function ok(cond, what) { if (!cond) throw new Error(what); }
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  var tests = {
+    opensSheetAndPreventsNative: function () {
+      eq(down(source), true, 'mousedown prevented');
+      ok(sheet(), 'sheet open');
+      eq(q('.stm-title').textContent.trim(), 'Chat Completion Source', 'title');
+      eq(document.querySelectorAll('#stm-select-sheet .stm-row').length, 10, 'rows');
+      eq(document.querySelectorAll('#stm-select-sheet .stm-divider').length, 1, 'dividers');
+      eq(window.__stmSelectSheet.isOpen(), true, 'isOpen');
+    },
+    marksCurrent: function () {
+      source.value = 'claude';
+      down(source);
+      var sel = document.querySelectorAll('#stm-select-sheet .stm-row.stm-selected');
+      eq(sel.length, 1, 'selected rows');
+      eq(sel[0].textContent.trim(), 'Claude', 'selected text');
+      eq(sel[0].getAttribute('data-index'), String(source.selectedIndex), 'data-index');
+    },
+    pickAppliesAndFiresEvents: function () {
+      source.value = 'openai';
+      down(source);
+      tap(rowByText('AI21'));
+      eq(source.value, 'ai21', 'value');
+      eq(events, ['input', 'change'], 'events');
+      ok(!sheet(), 'sheet closed');
+    },
+    repickCurrentFiresNothing: function () {
+      source.value = 'claude';
+      down(source);
+      tap(rowByText('Claude'));
+      eq(source.value, 'claude', 'value');
+      eq(events, [], 'events');
+      ok(!sheet(), 'sheet closed');
+    },
+    searchOnlyOnLongLists: function () {
+      down(source);
+      var search = q('.stm-search');
+      ok(search && !search.hidden, 'search shown for 10 options');
+      search.value = 'cl';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      eq(visibleRows().map(function (r) { return r.textContent.trim(); }), ['Claude', 'Cloudflare Workers AI'], 'filtered');
+      ok(q('.stm-empty').hidden, 'no empty text while matching');
+      search.value = 'zzz';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      eq(visibleRows().length, 0, 'no rows');
+      ok(!q('.stm-empty').hidden, 'empty text shown');
+      eq(q('.stm-empty').textContent, 'No matches', 'empty text');
+      eq(events, [], 'search typing is not a select event');
+      window.__stmSelectSheet.close();
+      down(yesNo);
+      var s2 = q('.stm-search');
+      ok(!s2 || s2.hidden, 'no search for 2 options');
+      eq(q('.stm-title').textContent.trim(), 'Yes/No', 'label[for] title');
+      eq(visibleRows().length, 2, 'search reset on reopen');
+    },
+    escapeAndDimCloseWithoutChange: function () {
+      source.value = 'cohere';
+      down(source);
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      ok(!sheet(), 'closed by Escape');
+      down(source);
+      tap(q('.stm-dim'));
+      ok(!sheet(), 'closed by dim');
+      eq(source.value, 'cohere', 'value');
+      eq(events, [], 'events');
+    },
+    closesOnDialogCancel: function () {
+      down(yesNo);
+      var root = document.getElementById('stm-select-sheet');
+      root.dispatchEvent(new Event('cancel', { cancelable: true }));
+      ok(!sheet(), 'closed by cancel');
+      eq(events, [], 'events');
+    },
+    multipleUsesDone: function () {
+      down(letters);
+      ok(sheet(), 'open');
+      eq(q('.stm-title').textContent.trim(), 'Letters', 'sibling title');
+      tap(rowByText('a'));
+      tap(rowByText('c'));
+      ok(sheet(), 'still open after toggles');
+      eq(events, [], 'no events before Done');
+      tap(q('.stm-done'));
+      var vals = Array.prototype.filter.call(letters.options, function (o) { return o.selected; })
+        .map(function (o) { return o.value; });
+      eq(vals, ['a', 'c'], 'selected');
+      eq(events, ['input', 'change'], 'events');
+      ok(!sheet(), 'closed');
+    },
+    multipleDimDiscards: function () {
+      letters.options[0].selected = true; letters.options[1].selected = false; letters.options[2].selected = false;
+      down(letters);
+      tap(rowByText('b'));
+      tap(q('.stm-dim'));
+      eq(letters.options[1].selected, false, 'b untouched');
+      eq(events, [], 'events');
+    },
+    namedGroupsAndDisabledOptions: function () {
+      named.value = 'apple';
+      down(named);
+      eq(q('.stm-title').textContent.trim(), 'Named groups', 'aria-label title');
+      eq(Array.prototype.map.call(document.querySelectorAll('#stm-select-sheet .stm-group'),
+        function (g) { return g.textContent.trim(); }), ['Fruit', 'Veg'], 'group headers');
+      eq(document.querySelectorAll('#stm-select-sheet .stm-divider').length, 0, 'no dividers');
+      var leek = rowByText('Leek');
+      ok(leek.classList.contains('stm-disabled'), 'disabled row');
+      tap(leek);
+      ok(sheet(), 'disabled tap keeps sheet open');
+      eq(named.value, 'apple', 'value');
+      eq(events, [], 'events');
+    },
+    listBoxAndDisabledAreNotIntercepted: function () {
+      eq(down(sizeFour), false, 'size=4');
+      eq(down(disabled), false, 'disabled');
+      ok(!sheet(), 'no sheet');
+    },
+    optionsMutateWhileOpenClosesWithoutChange: function () {
+      source.value = 'chutes';
+      down(source);
+      ok(sheet(), 'open');
+      var o = document.createElement('option');
+      o.value = 'zz'; o.textContent = 'ZZ';
+      source.appendChild(o);
+      return Promise.resolve().then(function () { return wait(50); }).then(function () {
+        ok(!sheet(), 'closed after mutation');
+        eq(source.value, 'chutes', 'value');
+        eq(events, [], 'events');
+        source.removeChild(o);
+      });
+    },
+    brokenOpenFallsBack: function () {
+      var thrown = false;
+      Element.prototype.appendChild = function () {
+        delete Element.prototype.appendChild;
+        thrown = true;
+        throw new Error('boom');
+      };
+      try {
+        eq(down(yesNo), false, 'mousedown not prevented');
+        ok(thrown, 'open hit appendChild');
+        ok(!sheet(), 'no sheet');
+        eq(window.__stmSelectSheet.isOpen(), false, 'isOpen');
+      } finally {
+        delete Element.prototype.appendChild;
+      }
+      eq(down(yesNo), true, 'works again afterwards');
+    },
+  };
+
+  function finish(result) { document.body.dataset.result = result; }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var names = Object.keys(tests), i = 0;
+    function next() {
+      if (i >= names.length) return finish('PASS');
+      var name = names[i++];
+      events.length = 0;
+      Promise.resolve().then(tests[name]).then(function () {
+        if (window.__stmSelectSheet) window.__stmSelectSheet.close();
+        next();
+      }, function (e) {
+        finish('FAIL: ' + name + ': ' + (e && e.message));
+      });
+    }
+    next();
+  });
+})();
+</script>
+</body>
+</html>

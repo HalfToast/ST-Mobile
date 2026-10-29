@@ -47,6 +47,7 @@ class WebViewHolder(
     private val mainHandler = Handler(Looper.getMainLooper())
     private val downloads = Downloads(activity, mainHandler)
     private val links = ExternalLinks(activity)
+    private val selectSheetScript = SelectSheet.load(activity)
 
     /** Origin the current WebView's page hooks were installed for. Read on Chromium IO threads too. */
     @Volatile private var serverOrigin: String? = Origins.of(appSettings.serverUrl)
@@ -472,6 +473,7 @@ class WebViewHolder(
         CookieManager.getInstance().setAcceptCookie(true)
         downloads.install(this, serverOrigin)
         ThemeBridge.install(this, serverOrigin, onTheme)
+        SelectSheet.install(this, serverOrigin, selectSheetScript)
 
         webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
@@ -579,7 +581,7 @@ class WebViewHolder(
             android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(t.drop(1)) ?: "*/*"
         } else t
 
-    private companion object {
+    internal companion object {
         /** "ready" needs a positive ST marker; the login page has neither marker. */
         const val READY_PROBE = "(function(){if(location.pathname.indexOf('/login')===0)return 'login';" +
             "return (document.getElementById('preloader')===null&&document.getElementById('send_textarea')!==null)" +
@@ -595,6 +597,7 @@ class WebViewHolder(
         const val MAX_CRASH_RELOADS = 3
         const val CRASH_WINDOW_MS = 60_000L
         const val OPEN_UI_SELECTOR = ".openDrawer, dialog[open], #dialogue_popup:not([style*=\"none\"]), " +
-            "#character_popup:not([style*=\"none\"]), #select_chat_popup:not([style*=\"none\"])"
+            "#character_popup:not([style*=\"none\"]), #select_chat_popup:not([style*=\"none\"]), " +
+            "#stm-select-sheet.stm-open"
     }
 }
