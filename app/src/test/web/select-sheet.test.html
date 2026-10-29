@@ -108,6 +108,7 @@
     ev.touches = y === undefined ? [] : [{ clientY: y }];
     el.dispatchEvent(ev);
   }
+  function dialog() { return document.getElementById('stm-select-sheet'); }
   function sheet() { return document.querySelector('#stm-select-sheet.stm-open'); }
   function q(sel) { return document.querySelector('#stm-select-sheet ' + sel); }
   function visibleRows() {
@@ -331,6 +332,56 @@
       ok(sheet(), 'still open');
       eq(hiding.value, 'a', 'value');
     },
+    pickAppliesBeforeTheSlideEnds: function () {
+      source.value = 'openai';
+      down(source);
+      tap(rowByText('Cohere'));
+      eq(source.value, 'cohere', 'value at once');
+      eq(events, ['input', 'change'], 'events at once');
+      ok(!sheet() && !window.__stmSelectSheet.isOpen(), 'closed for the page at once');
+      eq(posted, ['open', 'closed'], 'app told at once');
+      ok(dialog().open, 'still sliding down');
+      return wait(400).then(function () { ok(!dialog().open, 'dialog closed after the slide'); });
+    },
+    openDuringACloseWorks: function () {
+      down(source);
+      tap(q('.stm-dim'));
+      ok(dialog().open, 'closing');
+      eq(down(yesNo), true, 'second open prevented the native list');
+      ok(sheet(), 'open again');
+      eq(q('.stm-title').textContent.trim(), 'Yes/No', 'the new list');
+      return wait(400).then(function () {
+        ok(sheet() && dialog().open, 'the earlier close did not close the new sheet');
+      });
+    },
+    backDuringACloseFinishesIt: function () {
+      down(source);
+      tap(q('.stm-dim'));
+      ok(dialog().open, 'closing');
+      var ev = new Event('cancel', { cancelable: true });
+      dialog().dispatchEvent(ev);
+      ok(!dialog().open, 'closed at once');
+      ok(ev.defaultPrevented, 'cancel still handled');
+    },
+    backWhileOpenSlidesDown: function () {
+      down(yesNo);
+      dialog().dispatchEvent(new Event('cancel', { cancelable: true }));
+      ok(!sheet(), 'closed for the page');
+      ok(dialog().open, 'sliding down');
+    },
+    reducedMotionClosesAtOnce: function () {
+      var real = window.matchMedia;
+      window.matchMedia = function (query) {
+        return { matches: query.indexOf('prefers-reduced-motion: reduce') >= 0 };
+      };
+      try {
+        down(source);
+        tap(q('.stm-dim'));
+        ok(!dialog().open, 'closed at once');
+      } finally {
+        window.matchMedia = real;
+      }
+    },
     listBoxAndDisabledAreNotIntercepted: function () {
       eq(down(sizeFour), false, 'size=4');
       eq(down(disabled), false, 'disabled');
@@ -410,6 +461,7 @@
         ok(!sheet(), 'no sheet');
         eq(window.__stmSelectSheet.isOpen(), false, 'isOpen');
         eq(posted, [], 'a failed open posts nothing');
+        ok(!dialog().open, 'a failed open leaves no dialog in the top layer');
       } finally {
         delete Element.prototype.appendChild;
       }

@@ -12,6 +12,10 @@
  *   the rows in and near view exist as elements, absolutely placed in a spacer and recycled while
  *   scrolling. Every row has the same measured height (one line, ellipsised), so positions and the
  *   scroll to the current row are arithmetic. Search runs over the array.
+ * - It slides up and down (the dim fades) over CLOSE_MS, transform and opacity only. A pick applies
+ *   at once; closing takes it away from the page at once (no stm-open, isOpen() false, "closed"
+ *   posted) and only dialog.close() waits for the slide. Opening again or a cancel (Back) finishes a
+ *   pending close at once. prefers-reduced-motion: no slide, closes at once.
  * - Any failure while opening returns false, and the native list opens as before.
  * - Tells the app when it opens and closes (STMobileSheet web message listener, "open" / "closed"),
  *   so the app's floating button can step out of the way. "closed" only ever follows an "open".
@@ -25,6 +29,7 @@
   var CSS_ID = 'stm-select-sheet-css';
   var SEARCH_ABOVE = 8;
   var SWIPE_CLOSE_PX = 80;
+  var CLOSE_MS = 200;
   // Rows rendered beyond each edge of the visible part of the list, in px.
   var BUFFER_PX = 400;
   // The tap that opened the sheet must not also hit it. A click only counts after a pointerdown
@@ -49,11 +54,18 @@
     '#' + ROOT_ID + ':not([open]){display:none;}',
     '#' + ROOT_ID + '::backdrop{background:transparent;}',
     S + '[hidden]{display:none !important;}',
-    S + '.stm-dim{position:absolute;inset:0;background:rgba(0,0,0,0.55);}',
+    S + '.stm-dim{position:absolute;inset:0;background:rgba(0,0,0,0.55);opacity:0;transition:opacity .2s ease-out;}',
+    '#' + ROOT_ID + '.stm-open .stm-dim{opacity:1;}',
     S + '.stm-panel{position:absolute;left:0;right:0;bottom:0;box-sizing:border-box;display:flex;' +
       'flex-direction:column;max-height:75vh;max-height:75dvh;background:' + BG + ';' +
       'border-top:1px solid ' + BORDER + ';border-radius:18px 18px 0 0;overflow:hidden;' +
-      'padding:8px 0 max(8px, env(safe-area-inset-bottom));transition:transform .15s ease-out;}',
+      'padding:8px 0 max(8px, env(safe-area-inset-bottom));transform:translateY(100%);' +
+      'transition:transform .2s ease-out;}',
+    '#' + ROOT_ID + '.stm-open .stm-panel{transform:none;}',
+    // Where an opening sheet comes from (older WebViews without @starting-style just show it).
+    '@starting-style{#' + ROOT_ID + '.stm-open .stm-panel{transform:translateY(100%);}' +
+      '#' + ROOT_ID + '.stm-open .stm-dim{opacity:0;}}',
+    '@media (prefers-reduced-motion: reduce){' + S + '.stm-panel,' + S + '.stm-dim{transition:none;}}',
     S + '.stm-head{flex:none;touch-action:none;outline:none;}',
     S + '.stm-handle{width:38px;height:4px;border-radius:2px;background:' + TEXT + ';opacity:.25;margin:0 auto 10px;}',
     S + '.stm-title{font-weight:600;font-size:1.07em;padding:4px 16px 10px;overflow-wrap:anywhere;}',
@@ -116,6 +128,7 @@
   var armed = false, openedAt = 0;
   var announced = false; // the app was told "open" and not yet "closed"
   var dragStart = null, dragDy = 0;
+  var closeTimer = null; // a closed sheet still sliding down; dialog.close() is pending
 
   function injectCss() {
     if (document.getElementById(CSS_ID)) return;
@@ -149,7 +162,11 @@
       });
     dlg.addEventListener('pointerdown', function () { armed = true; }, true);
     dlg.addEventListener('click', onClick);
-    dlg.addEventListener('cancel', function (e) { e.preventDefault(); close(); });
+    // Back: closes an open sheet (sliding), or finishes one already sliding down, so it's not lost.
+    dlg.addEventListener('cancel', function (e) {
+      e.preventDefault();
+      if (current) close(); else finishClose();
+    });
     search.addEventListener('input', filter);
     list.addEventListener('scroll', function () { if (current) render(); }, { passive: true });
     window.addEventListener('resize', function () { if (current) render(); });
@@ -319,6 +336,7 @@
   function open(select) {
     try {
       if (current) close();
+      finishClose();
       if (!select || select.tagName !== 'SELECT' || select.disabled) return false;
       injectCss();
       ensureRoot();
@@ -373,7 +391,7 @@
 
   /** A failed open leaves nothing open; the native list takes over. */
   function abort() {
-    try { close(); } catch (e) { current = null; observer = null; }
+    try { close(); finishClose(); } catch (e) { current = null; observer = null; }
   }
 
   function tellApp(message) {
@@ -394,8 +412,25 @@
     dragStart = null;
     if (!root) return;
     root.classList.remove('stm-open');
-    if (root.open) root.close();
     if (search) search.value = '';
+    if (!root.open) return;
+    if (reducedMotion()) finishClose();
+    else if (closeTimer === null) closeTimer = setTimeout(finishClose, CLOSE_MS);
+  }
+
+  /** Ends a close still sliding down: the dialog leaves the top layer now. */
+  function finishClose() {
+    if (closeTimer !== null) clearTimeout(closeTimer);
+    closeTimer = null;
+    if (root && root.open && !current) root.close();
+  }
+
+  function reducedMotion() {
+    try {
+      return window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    } catch (e) {
+      return false;
+    }
   }
 
   function fire(select) {
