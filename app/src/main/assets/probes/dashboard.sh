@@ -82,7 +82,7 @@ last_fetch=0
 [ -f "$last_fetch_file" ] && last_fetch=$(cat "$last_fetch_file" 2>/dev/null || echo 0)
 if [ $(( now - last_fetch )) -ge 300 ] 2>/dev/null; then
     echo "$now" > "$last_fetch_file" 2>/dev/null || true
-    (git -C "$ST_DIR" fetch -q 2>/dev/null &)
+    (timeout 60 git -C "$ST_DIR" fetch -q </dev/null >/dev/null 2>&1 &)
 fi
 upstream=$(git -C "$ST_DIR" rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)
 if [ -n "$upstream" ]; then
