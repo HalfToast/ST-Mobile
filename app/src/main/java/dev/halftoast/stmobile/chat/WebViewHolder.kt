@@ -1,6 +1,7 @@
 package dev.halftoast.stmobile.chat
 
 import android.annotation.SuppressLint
+import android.graphics.Bitmap
 import android.app.DownloadManager
 import android.content.ContentValues
 import android.net.Uri
@@ -39,11 +40,16 @@ import kotlin.concurrent.thread
 sealed interface ChatState {
     data object Loading : ChatState
     data object Ready : ChatState
+    /** SillyTavern's login page is showing; the user must sign in. Not an error. */
+    data object LoginRequired : ChatState
     data class Unreachable(val reason: String) : ChatState
 }
 
 /** Owns the single SillyTavern WebView for the lifetime of the Activity. */
 class WebViewHolder(private val activity: ComponentActivity, private val appSettings: AppSettings) {
+
+    private val handler = Handler(Looper.getMainLooper())
+    private val downloads = Downloads(activity, handler)
 
     var webView: WebView = createWebView()
         private set
@@ -53,12 +59,12 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
     private val _state = MutableStateFlow<ChatState>(ChatState.Loading)
     val state: StateFlow<ChatState> = _state
 
-    private val handler = Handler(Looper.getMainLooper())
     private val readyCallbacks = mutableListOf<(Long) -> Unit>()
     private var parent: ViewGroup? = null
     private var loadStartedAt = 0L
     private var loadGeneration = 0
     private var mainFrameFailed = false
+    private var pollingGeneration = -1
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
     private val multiPicker = activity.registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
@@ -108,13 +114,15 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
     }
 
     /**
-     * Back-press probe: counts open UI, sends Escape, re-counts 150 ms later.
+     * Back-press probe: counts open UI, closes the top dialog (ST closes popups on the native
+     * `cancel` event, which a synthetic Escape keydown never produces) or else sends Escape to the
+     * focused element, then re-counts 150 ms later.
      * [result] receives true when something closed.
      */
     fun probeBack(result: (consumedByPage: Boolean) -> Unit) {
         webView.evaluateJavascript(
             "(function(){var n=document.querySelectorAll('$OPEN_UI_SELECTOR').length;" +
-                "document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));return n;})()",
+                "var d=document.querySelectorAll('dialog[open]'),t=d[d.length-1];if(t){t.dispatchEvent(new Event('cancel',{cancelable:true}));}else{(document.activeElement||document).dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));}return n;})()",
         ) { beforeRaw ->
             val before = beforeRaw?.toIntOrNull() ?: 0
             handler.postDelayed({
@@ -127,28 +135,29 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
     }
 
     private fun WebView.loadUrlTimed() {
-        loadGeneration++
-        mainFrameFailed = false
-        loadStartedAt = SystemClock.elapsedRealtime()
         loadUrl(appSettings.serverUrl)
     }
 
     private fun startReadyPolling() {
         val gen = loadGeneration
+        if (pollingGeneration == gen) return
+        pollingGeneration = gen
         val view = webView
         val deadline = SystemClock.elapsedRealtime() + READY_TIMEOUT_MS
         lateinit var poll: Runnable
         poll = Runnable {
             if (gen != loadGeneration || view !== webView) return@Runnable
-            view.evaluateJavascript("document.getElementById('preloader') === null") { r ->
+            view.evaluateJavascript(READY_PROBE) { r ->
                 if (gen != loadGeneration || view !== webView) return@evaluateJavascript
-                if (r == "true") {
-                    val elapsed = SystemClock.elapsedRealtime() - loadStartedAt
-                    Log.i(StMobileApp.LOG_TAG, "ST_READY ms=$elapsed")
-                    _state.value = ChatState.Ready
-                    readyCallbacks.toList().forEach { it(elapsed) }
-                } else if (SystemClock.elapsedRealtime() < deadline) {
-                    handler.postDelayed(poll, POLL_INTERVAL_MS)
+                when (r) {
+                    "\"ready\"" -> {
+                        val elapsed = SystemClock.elapsedRealtime() - loadStartedAt
+                        Log.i(StMobileApp.LOG_TAG, "ST_READY ms=$elapsed")
+                        _state.value = ChatState.Ready
+                        readyCallbacks.toList().forEach { it(elapsed) }
+                    }
+                    "\"login\"" -> _state.value = ChatState.LoginRequired
+                    else -> if (SystemClock.elapsedRealtime() < deadline) handler.postDelayed(poll, POLL_INTERVAL_MS)
                 }
             }
         }
@@ -171,11 +180,30 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         }
         CookieManager.getInstance().setAcceptCookie(true)
-        addJavascriptInterface(BlobBridge(), BRIDGE_NAME)
+        downloads.install(this, appSettings.serverUrl)
 
         webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                 interceptor?.invoke(request)
+
+            override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+                loadGeneration++
+                mainFrameFailed = false
+                loadStartedAt = SystemClock.elapsedRealtime()
+                _state.value = ChatState.Loading
+            }
+
+            override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                if (!request.isForMainFrame || response.statusCode < 400) return
+                mainFrameFailed = true
+                val code = response.statusCode
+                val hint = when (code) {
+                    403 -> " Check the whitelist."
+                    401 -> " Authentication required."
+                    else -> ""
+                }
+                _state.value = ChatState.Unreachable("Server refused the connection ($code).$hint")
+            }
 
             override fun onPageFinished(view: WebView, url: String?) {
                 CookieManager.getInstance().flush() // persist the login session promptly
@@ -220,8 +248,7 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         }
 
         setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
-            if (url.startsWith("blob:")) downloadBlob(url, contentDisposition, mimeType)
-            else if (url.startsWith("http")) downloadHttp(url, userAgent, contentDisposition, mimeType)
+            downloads.onDownloadStart(this, url, userAgent, contentDisposition, mimeType)
         }
     }
 
@@ -231,62 +258,11 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
             android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(t.drop(1)) ?: "*/*"
         } else t
 
-    private fun downloadHttp(url: String, userAgent: String?, disposition: String?, mime: String?) {
-        val req = DownloadManager.Request(Uri.parse(url))
-            .setMimeType(mime)
-            .addRequestHeader("Cookie", CookieManager.getInstance().getCookie(url) ?: "")
-            .addRequestHeader("User-Agent", userAgent ?: "")
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-        val name = URLUtil.guessFileName(url, disposition, mime)
-        req.setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, name)
-        (activity.getSystemService(DownloadManager::class.java)).enqueue(req)
-        Toast.makeText(activity, "Downloading $name", Toast.LENGTH_SHORT).show()
-    }
-
-    /** One-shot fetch -> base64 -> native; only runs when a blob download starts. */
-    private fun downloadBlob(url: String, disposition: String?, mime: String?) {
-        val name = URLUtil.guessFileName(url, disposition, mime)
-        val js = "(function(){fetch(${JSONObject.quote(url)}).then(function(r){return r.blob();}).then(function(b){" +
-            "var f=new FileReader();f.onloadend=function(){var s=String(f.result);" +
-            "$BRIDGE_NAME.save(s.substring(s.indexOf(',')+1),b.type||${JSONObject.quote(mime ?: "")},${JSONObject.quote(name)});};" +
-            "f.readAsDataURL(b);}).catch(function(e){$BRIDGE_NAME.fail(String(e));});})()"
-        webView.evaluateJavascript(js, null)
-    }
-
-    private inner class BlobBridge {
-        @JavascriptInterface
-        fun save(base64: String, mime: String, name: String) {
-            thread {
-                try {
-                    val bytes = Base64.getDecoder().decode(base64)
-                    val values = ContentValues().apply {
-                        put(MediaStore.Downloads.DISPLAY_NAME, name)
-                        if (mime.isNotEmpty()) put(MediaStore.Downloads.MIME_TYPE, mime)
-                        put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
-                        put(MediaStore.Downloads.IS_PENDING, 1)
-                    }
-                    val resolver = activity.contentResolver
-                    val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                        ?: error("MediaStore insert failed")
-                    resolver.openOutputStream(uri)!!.use { it.write(bytes) }
-                    resolver.update(uri, ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }, null, null)
-                    toast("Saved $name to Downloads")
-                } catch (e: Exception) {
-                    Log.w(StMobileApp.LOG_TAG, "blob save failed", e)
-                    toast("Download failed: ${e.message}")
-                }
-            }
-        }
-
-        @JavascriptInterface
-        fun fail(message: String) = toast("Download failed: $message")
-
-        private fun toast(msg: String) =
-            handler.post { Toast.makeText(activity, msg, Toast.LENGTH_LONG).show() }
-    }
-
     private companion object {
-        const val BRIDGE_NAME = "STMobileDownloads"
+        /** "ready" needs a positive ST marker; the login page has neither marker. */
+        const val READY_PROBE = "(function(){if(location.pathname.indexOf('/login')===0)return 'login';" +
+            "return (document.getElementById('preloader')===null&&document.getElementById('send_textarea')!==null)" +
+            "?'ready':'wait';})()"
         const val POLL_INTERVAL_MS = 200L
         const val READY_TIMEOUT_MS = 60_000L
         const val OPEN_UI_SELECTOR = ".openDrawer, dialog[open], #dialogue_popup:not([style*=\"none\"]), " +

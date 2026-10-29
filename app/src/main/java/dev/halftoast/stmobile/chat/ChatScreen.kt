@@ -33,7 +33,7 @@ fun ChatScreen(holder: WebViewHolder, onOpenControlCenter: () -> Unit, modifier:
         )
         when (val s = state) {
             ChatState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
-            ChatState.Ready -> Unit
+            ChatState.Ready, ChatState.LoginRequired -> Unit
             is ChatState.Unreachable -> Surface(Modifier.fillMaxSize()) {
                 Column(
                     Modifier.fillMaxSize().padding(24.dp),
