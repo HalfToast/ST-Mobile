@@ -1,10 +1,10 @@
 package dev.halftoast.stmobile.panel
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,17 +16,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -37,17 +29,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.LifecycleStartEffect
-
-private val OnlineGreen = Color(0xFF2E7D32)
-private val OfflineRed = Color(0xFFC62828)
+import dev.halftoast.stmobile.ui.LocalStPalette
+import dev.halftoast.stmobile.ui.StBox
+import dev.halftoast.stmobile.ui.StButton
+import dev.halftoast.stmobile.ui.StDialog
+import dev.halftoast.stmobile.ui.StKeyValue
+import dev.halftoast.stmobile.ui.StMono
+import dev.halftoast.stmobile.ui.StSectionTitle
+import dev.halftoast.stmobile.ui.StTone
 
 /**
- * Control Center (mockup A): status, update banner, stats grid, Server / Maintenance / Whitelist
+ * Control Center (mockup A, ST style): status, update banner, stats box, Server / Maintenance / Whitelist
  * actions and the recent log. Polls only while composed and the app is started.
  */
 @Composable
@@ -106,10 +102,11 @@ fun PanelScreen(
                 ActionButton(PanelAction.CleanCache, ui) { vm.request(it) }
             }
             ActionGroup("Whitelist") {
-                OutlinedButton(
+                StButton(
+                    "Manage whitelist",
                     onClick = { showWhitelist = true; vm.loadWhitelist() },
                     modifier = Modifier.weight(1f),
-                ) { Text("Manage whitelist") }
+                )
             }
             ui.dashboard?.let { RecentLogCard(it.recentLogs, onOpenLogs) }
         }
@@ -133,63 +130,62 @@ fun PanelScreen(
 
 @Composable
 private fun StatusHeader(d: DashboardState?) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("SillyTavern", style = MaterialTheme.typography.titleLarge)
-            if (d != null) {
-                Text(
-                    listOfNotNull(d.pid?.let { "PID $it" }, "${d.branch} @ ${d.commit}").joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+    val p = LocalStPalette.current
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("SillyTavern", Modifier.weight(1f), color = Color(p.text), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            when (d?.online) {
+                true -> StatusChip("Online", Color(p.online), dot = true)
+                false -> StatusChip("Offline", Color(p.muted), dot = false)
+                null -> StatusChip("Unknown", Color(p.muted), dot = false)
             }
         }
-        when (d?.online) {
-            true -> Pill("Online", OnlineGreen)
-            false -> Pill("Offline", OfflineRed)
-            null -> Pill("Unknown", MaterialTheme.colorScheme.outline)
+        if (d != null) {
+            Text(
+                listOfNotNull(d.pid?.let { "PID $it" }, "${d.branch} @ ${d.commit}").joinToString(" · "),
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(p.muted),
+            )
         }
     }
 }
 
 @Composable
-private fun Pill(text: String, color: Color) {
-    Row(
-        Modifier
-            .clip(RoundedCornerShape(50))
-            .background(color.copy(alpha = 0.15f))
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(Modifier.size(8.dp).clip(CircleShape).background(color))
-        Spacer(Modifier.width(6.dp))
+private fun StatusChip(text: String, color: Color, dot: Boolean) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        if (dot) {
+            Box(Modifier.size(8.dp).clip(CircleShape).background(color))
+            Spacer(Modifier.width(6.dp))
+        }
         Text(text, color = color, style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.SemiBold)
     }
 }
 
 @Composable
 private fun ErrorCard(message: String, hostKeyChanged: Boolean, onRetry: () -> Unit, onOpenSettings: () -> Unit) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    val p = LocalStPalette.current
+    StBox(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
                 if (hostKeyChanged) "Host key changed" else "Can't read the server",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onErrorContainer,
+                color = Color(p.text),
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
             )
-            Text(message, color = MaterialTheme.colorScheme.onErrorContainer)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(message, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 if (hostKeyChanged) {
-                    Button(onClick = onOpenSettings) { Text("Open Settings") }
-                    TextButton(onClick = onRetry) { Text("Retry") }
+                    StButton("Open Settings", onOpenSettings, Modifier.weight(1f))
+                    StButton("Retry", onRetry, Modifier.weight(1f))
                 } else {
-                    Button(onClick = onRetry) { Text("Retry") }
+                    StButton("Retry", onRetry, Modifier.weight(1f))
                 }
             }
             if (hostKeyChanged) {
                 Text(
                     "In Settings, use \"Trust new host key\" only if you know why the key changed (for example, Termux was reinstalled).",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    color = Color(p.muted),
                 )
             }
         }
@@ -198,31 +194,28 @@ private fun ErrorCard(message: String, hostKeyChanged: Boolean, onRetry: () -> U
 
 @Composable
 private fun RestartCard(enabled: Boolean, onRestart: () -> Unit, onLater: () -> Unit) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
-        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                "Restart SillyTavern to apply the changes.",
-                Modifier.weight(1f),
-                color = MaterialTheme.colorScheme.onTertiaryContainer,
-            )
-            TextButton(onClick = onLater) { Text("Later") }
-            Button(onClick = onRestart, enabled = enabled) { Text("Restart now") }
+    StBox(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(vertical = 10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Restart SillyTavern to apply the changes.", style = MaterialTheme.typography.bodyMedium)
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                StButton("Later", onLater, Modifier.weight(1f))
+                StButton("Restart now", onRestart, Modifier.weight(1f), enabled = enabled)
+            }
         }
     }
 }
 
 @Composable
 private fun UpdateBanner(behind: Int, ui: PanelUi, onUpdate: () -> Unit) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-        Row(Modifier.padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+    StBox(Modifier.fillMaxWidth()) {
+        Row(Modifier.padding(vertical = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(
                 "Update available: $behind commit${if (behind == 1) "" else "s"} behind",
                 Modifier.weight(1f),
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                color = Color(LocalStPalette.current.accent),
+                style = MaterialTheme.typography.bodyMedium,
             )
-            Button(onClick = onUpdate, enabled = ui.actionsEnabled) {
-                if (ui.busy == PanelAction.Update) BusySpinner() else Text("Update")
-            }
+            StButton("Update", onUpdate, enabled = ui.actionsEnabled, busy = ui.busy == PanelAction.Update)
         }
     }
 }
@@ -237,57 +230,35 @@ private fun StatsGrid(d: DashboardState) {
     val cpuRam = if (d.online) listOfNotNull(d.cpuPercent?.let { "$it %" }, d.ramMb?.let { "$it MB" }).joinToString(" · ").ifEmpty { "—" } else "—"
     val battery = d.batteryLevel?.let { lvl -> "$lvl %" + (d.batteryStatus?.let { " · $it" } ?: "") } ?: "—"
     val disk = d.diskFree?.let { free -> free + (d.diskUsedPercent?.let { " ($it used)" } ?: "") } ?: "—"
-    val tiles = listOf(
-        "Uptime" to (if (d.online) d.uptime ?: "—" else "—"),
-        "Health" to health,
-        "CPU / RAM" to cpuRam,
-        "Tablet battery" to battery,
-        "Disk free" to disk,
-        "Cache" to (d.cacheSize ?: "—"),
-    )
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        tiles.chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                row.forEach { (label, value) -> StatTile(label, value, Modifier.weight(1f)) }
-            }
-        }
+    StBox(Modifier.fillMaxWidth()) {
+        StKeyValue("Uptime", if (d.online) d.uptime ?: "—" else "—")
+        StKeyValue("Health", health)
+        StKeyValue("CPU / RAM", cpuRam)
+        StKeyValue("Tablet battery", battery)
+        StKeyValue("Disk free", disk)
+        StKeyValue("Cache", d.cacheSize ?: "—")
         if (d.userDirMissing) {
-            Card(
-                Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-            ) {
-                Text(
-                    userDirMissingMessage(d.userDir),
-                    Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                    color = MaterialTheme.colorScheme.onErrorContainer,
-                )
-            }
+            Text(
+                userDirMissingMessage(d.userDir),
+                Modifier.padding(vertical = 6.dp),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+            )
         } else {
-            StatTile(
+            StKeyValue(
                 "Inventory",
                 "${d.characters} characters · ${d.chats} chats · ${d.worlds} worlds · ${d.personas} personas · ${d.backups} backups",
-                Modifier.fillMaxWidth(),
             )
         }
-        StatTile("Last client", d.lastClient ?: "—", Modifier.fillMaxWidth())
-    }
-}
-
-@Composable
-private fun StatTile(label: String, value: String, modifier: Modifier = Modifier) {
-    Card(modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text(value, style = MaterialTheme.typography.bodyLarge, fontWeight = FontWeight.Medium)
-        }
+        StKeyValue("Last client", d.lastClient ?: "—", last = true)
     }
 }
 
 @Composable
 private fun ActionGroup(title: String, content: @Composable androidx.compose.foundation.layout.RowScope.() -> Unit) {
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(title, style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), content = content)
+        StSectionTitle(title)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), content = content)
     }
 }
 
@@ -298,21 +269,14 @@ private fun androidx.compose.foundation.layout.RowScope.ActionButton(
     enabled: Boolean = true,
     onClick: (PanelAction) -> Unit,
 ) {
-    val destructive = action == PanelAction.Stop
-    FilledTonalButton(
+    StButton(
+        action.label,
         onClick = { onClick(action) },
-        enabled = enabled && ui.actionsEnabled,
         modifier = Modifier.weight(1f),
-        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
-        colors = if (destructive) {
-            ButtonDefaults.filledTonalButtonColors(
-                containerColor = MaterialTheme.colorScheme.errorContainer,
-                contentColor = MaterialTheme.colorScheme.onErrorContainer,
-            )
-        } else ButtonDefaults.filledTonalButtonColors(),
-    ) {
-        if (ui.busy == action) BusySpinner() else Text(action.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
-    }
+        enabled = enabled && ui.actionsEnabled,
+        tone = if (action == PanelAction.Stop) StTone.Danger else StTone.Normal,
+        busy = ui.busy == action,
+    )
 }
 
 @Composable
@@ -322,34 +286,38 @@ private fun LastActionLine(r: ActionResult) {
         style = MaterialTheme.typography.bodyMedium,
         maxLines = 2,
         overflow = TextOverflow.Ellipsis,
-        color = if (r is ActionResult.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+        color = if (r is ActionResult.Failed) MaterialTheme.colorScheme.error else Color(LocalStPalette.current.muted),
     )
 }
 
 @Composable
-private fun BusySpinner() = CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-
-@Composable
 private fun RecentLogCard(lines: List<String>, onOpenLogs: () -> Unit) {
-    Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
-        Column(Modifier.padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Recent log", Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
-                TextButton(onClick = onOpenLogs) { Text("Open Logs") }
+    val p = LocalStPalette.current
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.weight(1f)) { StSectionTitle("Recent log") }
+            Text(
+                "Open Logs",
+                Modifier.clip(RoundedCornerShape(4.dp)).clickable(onClick = onOpenLogs).padding(horizontal = 8.dp, vertical = 6.dp),
+                color = Color(p.accent),
+                style = MaterialTheme.typography.labelLarge,
+            )
+        }
+        StBox(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(vertical = 6.dp)) {
+                if (lines.isEmpty()) {
+                    Text("No log lines", style = MaterialTheme.typography.bodySmall, color = Color(p.muted))
+                }
+                lines.forEach {
+                    Text(
+                        it,
+                        fontFamily = StMono,
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
-            if (lines.isEmpty()) {
-                Text("No log lines", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            lines.forEach {
-                Text(
-                    it,
-                    fontFamily = FontFamily.Monospace,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            Spacer(Modifier.size(8.dp))
         }
     }
 }
@@ -371,11 +339,12 @@ private fun ConfirmDialog(action: PanelAction, d: DashboardState?, onConfirm: ()
         )
         else -> Triple("${action.label}?", "", action.label)
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(title) },
-        text = { Text(text) },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(button) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+    StDialog(
+        title = title,
+        onDismiss = onDismiss,
+        confirm = {
+            StButton(button, onConfirm, tone = if (action == PanelAction.Stop) StTone.Danger else StTone.Normal)
+        },
+        dismiss = { StButton("Cancel", onDismiss) },
+    ) { Text(text, style = MaterialTheme.typography.bodyMedium) }
 }
