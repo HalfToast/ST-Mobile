@@ -25,10 +25,16 @@ native screens that manage the server over SSH. It has four screens: Chat, Contr
 
 There is no tab bar. A small floating button sits over the chat. Drag it anywhere; it snaps to the left
 or right edge and remembers where you left it. It hides while the keyboard or a dropdown's list sheet is
-open. Tap it and it fans out three buttons: Control Center, Stats and Logs.
+open, and while the chat can't reach SillyTavern. Tap it and it fans out four buttons: Control Center,
+Stats, Logs, and Reload, which reloads SillyTavern straight away.
 
 Those screens open full screen with a slim top bar. It has a back arrow, buttons for the other two
 screens, and on the Control Center a Settings gear.
+
+While the chat reconnects, a small "Reconnecting…" pill shows at the top. If SillyTavern can't be
+reached, the chat says why as far as the phone can tell. If Tailscale is off on the phone, it offers to
+open Tailscale and retries by itself once Tailscale is on. If the tablet answers but SillyTavern isn't
+running, it offers to start the server. If the tablet doesn't answer at all, it may be asleep.
 
 Movement is short and quick: those screens slide in over the chat and back out, the fan and the list
 sheet slide open and shut, dialogs fade in, and buttons light up softly when pressed.
