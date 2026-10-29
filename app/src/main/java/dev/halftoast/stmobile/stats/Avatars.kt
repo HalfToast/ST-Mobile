@@ -10,6 +10,8 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -104,7 +106,7 @@ fun httpAvatarFetch(targetPx: Int, serverUrl: () -> String): suspend (String) ->
             }
             if (!isImageResponse(conn.responseCode, conn.contentType)) null
             else if (conn.contentLengthLong > MAX_AVATAR_BYTES) null
-            else decodeAvatar(conn.inputStream.use { it.readBytes() }, targetPx)
+            else conn.inputStream.use { readAtMost(it, MAX_AVATAR_BYTES) }?.let { decodeAvatar(it, targetPx) }
         } catch (e: Throwable) {
             null
         } finally {
@@ -113,8 +115,19 @@ fun httpAvatarFetch(targetPx: Int, serverUrl: () -> String): suspend (String) ->
     }
 }
 
+/** All of [input] if it is at most [limit] bytes; null (after reading just past the limit) if longer. */
+fun readAtMost(input: InputStream, limit: Int): ByteArray? {
+    val out = ByteArrayOutputStream()
+    val buf = ByteArray(8 * 1024)
+    while (true) {
+        val n = input.read(buf, 0, minOf(buf.size, limit - out.size() + 1))
+        if (n < 0) return out.toByteArray()
+        out.write(buf, 0, n)
+        if (out.size() > limit) return null
+    }
+}
+
 private fun decodeAvatar(bytes: ByteArray, targetPx: Int): ImageBitmap? {
-    if (bytes.size > MAX_AVATAR_BYTES) return null
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
     val options = BitmapFactory.Options().apply { inSampleSize = avatarSampleSize(bounds.outWidth, bounds.outHeight, targetPx) }

@@ -76,4 +76,19 @@ class AvatarsTest {
         assertEquals(1, avatarSampleSize(0, 0, 220)); assertEquals(1, avatarSampleSize(-1, 500, 220))
         assertEquals(1, avatarSampleSize(1000, 1000, 0))
     }
+
+    @Test fun readsAtMostTheLimit() {
+        val ten = ByteArray(10) { it.toByte() }
+        assertEquals(10, readAtMost(ten.inputStream(), 10)?.size)
+        assertEquals(ten.toList(), readAtMost(ten.inputStream(), 64)?.toList())
+        assertNull(readAtMost(ten.inputStream(), 9))
+        // Never reads far past the limit: a huge body stops after limit + one buffer.
+        var served = 0L
+        val endless = object : java.io.InputStream() {
+            override fun read(): Int { served++; return 1 }
+            override fun read(b: ByteArray, off: Int, len: Int): Int { served += len; return len }
+        }
+        assertNull(readAtMost(endless, 100_000))
+        assertTrue("read $served bytes", served <= 100_000 + 16 * 1024)
+    }
 }
