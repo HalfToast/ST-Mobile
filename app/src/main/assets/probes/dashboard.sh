@@ -63,7 +63,9 @@ disk_used=$(df -h "$HOME" 2>/dev/null | awk 'NR==2 {print $5}')
 [ -n "$disk_free" ] && echo "disk_free=$disk_free"
 [ -n "$disk_used" ] && echo "disk_used_pct=$disk_used"
 
-# Asset counts
+# Asset counts (a missing user folder would otherwise just read as zero of everything)
+echo "user_dir=$(clean "${ST_USER:-default-user}")"
+[ -d "$USER_DIR" ] || echo "user_dir_missing=1"
 echo "chars=$(ls "${USER_DIR}/characters" 2>/dev/null | wc -l | tr -d ' ')"
 echo "chats=$(ls "${USER_DIR}/chats" 2>/dev/null | wc -l | tr -d ' ')"
 echo "worlds=$(ls "${USER_DIR}/worlds" 2>/dev/null | wc -l | tr -d ' ')"

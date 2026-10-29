@@ -44,6 +44,19 @@ class ParsersTest {
         assertTrue(d.online)
     }
 
+    @Test fun dashboardUserDirMissing() {
+        val d = parseDashboard("online=1\npid=12\nuser_dir=typo-user\nuser_dir_missing=1\nchars=0\nchats=0\n")
+        assertTrue(d.userDirMissing)
+        assertEquals("typo-user", d.userDir)
+        assertEquals("SillyTavern user folder 'typo-user' not found — check Settings", userDirMissingMessage(d.userDir))
+    }
+
+    @Test fun dashboardUserDirPresent() {
+        val d = parseDashboard(fixture("dashboard-online.txt") + "user_dir=default-user\n")
+        assertFalse(d.userDirMissing)
+        assertEquals("default-user", d.userDir)
+    }
+
     @Test fun backupOk() {
         val r = parseBackupResult(fixture("stpanel-backup.txt"))
         assertTrue(r is ActionResult.Ok)

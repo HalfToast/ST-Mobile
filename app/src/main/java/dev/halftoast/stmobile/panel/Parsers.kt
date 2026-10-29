@@ -39,8 +39,14 @@ fun parseDashboard(raw: String): DashboardState {
         backups = int("backups") ?: 0,
         lastClient = get("last_client"),
         recentLogs = kv.filter { it.first == "log" }.map { it.second }.take(3),
+        userDir = get("user_dir"),
+        userDirMissing = get("user_dir_missing") == "1",
     )
 }
+
+/** Shown instead of the inventory counts when the dashboard reports `user_dir_missing=1`. */
+fun userDirMissingMessage(userDir: String?): String =
+    "SillyTavern user folder '${userDir ?: "?"}' not found — check Settings"
 
 fun parseStats(raw: String): List<CharacterStat> =
     stripAnsi(raw).lineSequence().mapNotNull { line ->

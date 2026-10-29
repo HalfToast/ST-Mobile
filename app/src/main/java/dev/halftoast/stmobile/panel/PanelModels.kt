@@ -24,6 +24,10 @@ data class DashboardState(
     val backups: Int,
     val lastClient: String?,
     val recentLogs: List<String>,
+    /** The SillyTavern user folder the counts were read from. */
+    val userDir: String? = null,
+    /** That folder doesn't exist on the tablet, so the counts are meaningless (all zero). */
+    val userDirMissing: Boolean = false,
 )
 
 data class CharacterStat(val name: String, val messages: Int, val lastActiveEpochSec: Long)

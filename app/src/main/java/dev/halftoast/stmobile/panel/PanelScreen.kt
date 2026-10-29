@@ -251,11 +251,24 @@ private fun StatsGrid(d: DashboardState) {
                 row.forEach { (label, value) -> StatTile(label, value, Modifier.weight(1f)) }
             }
         }
-        StatTile(
-            "Inventory",
-            "${d.characters} characters · ${d.chats} chats · ${d.worlds} worlds · ${d.personas} personas · ${d.backups} backups",
-            Modifier.fillMaxWidth(),
-        )
+        if (d.userDirMissing) {
+            Card(
+                Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+            ) {
+                Text(
+                    userDirMissingMessage(d.userDir),
+                    Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                )
+            }
+        } else {
+            StatTile(
+                "Inventory",
+                "${d.characters} characters · ${d.chats} chats · ${d.worlds} worlds · ${d.personas} personas · ${d.backups} backups",
+                Modifier.fillMaxWidth(),
+            )
+        }
         StatTile("Last client", d.lastClient ?: "—", Modifier.fillMaxWidth())
     }
 }

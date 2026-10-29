@@ -18,7 +18,10 @@ sealed interface HostKeyCheck {
     data class Changed(val expected: String, val actual: String) : HostKeyCheck
 }
 
-/** Trust on first use. A mismatch is never auto-trusted; the user must clear the pin in Settings. */
+/**
+ * Trust on first use. A mismatch is never auto-trusted: the user must confirm the new fingerprint with
+ * "Trust new host key" in Settings, which pins exactly the key they were shown ([pinAfterConfirm]).
+ */
 object HostKeyPolicy {
     fun decide(known: String?, presented: String): HostKeyDecision = when {
         known.isNullOrEmpty() -> HostKeyDecision.TrustAndStore
