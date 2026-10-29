@@ -1,0 +1,5 @@
+mode=true
+entry=::1
+entry=127.0.0.1
+entry=100.64.0.7
+entry=100.64.0.0/10
