@@ -31,11 +31,15 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import dev.halftoast.stmobile.BuildConfig
 import dev.halftoast.stmobile.StMobileApp
 import dev.halftoast.stmobile.settings.AppSettings
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import org.json.JSONObject
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 import java.util.Base64
 import kotlin.concurrent.thread
 
@@ -56,10 +60,14 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
     var webView: WebView = createWebView()
         private set
 
+    @Volatile
     var interceptor: ((WebResourceRequest) -> WebResourceResponse?)? = null
 
     private val _state = MutableStateFlow<ChatState>(ChatState.Loading)
     val state: StateFlow<ChatState> = _state
+
+    private val assetCache = AssetCache(File(activity.cacheDir, "asset-cache"))
+    private var navToken = 0
 
     private val readyCallbacks = mutableListOf<(Long) -> Unit>()
     private var parent: ViewGroup? = null
@@ -82,6 +90,7 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
             if (event == Lifecycle.Event.ON_PAUSE) CookieManager.getInstance().flush()
         })
         CookieManager.getInstance().setAcceptCookie(true)
+        interceptor = ::serveFromAssetCache
         webView.loadUrlTimed()
     }
 
@@ -147,8 +156,74 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         }
     }
 
+    private fun cacheDisabled() = BuildConfig.DEBUG && appSettings.debugDisableAssetCache
+
+    /** Resolves the server's git revision (off the main thread), then loads; the cache is namespaced by it. */
     private fun WebView.loadUrlTimed() {
-        loadUrl(appSettings.serverUrl)
+        val serverUrl = appSettings.serverUrl
+        val token = ++navToken
+        thread(name = "st-version") {
+            val revision = if (cacheDisabled()) null else fetchRevision(serverUrl)
+            assetCache.setRevision(revision)
+            handler.post {
+                if (token == navToken) this@WebViewHolder.webView.loadUrl(serverUrl)
+            }
+        }
+    }
+
+    private fun fetchRevision(serverUrl: String): String? = try {
+        val url = serverUrl.trimEnd('/') + "/version"
+        val conn = URL(url).openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = VERSION_TIMEOUT_MS
+            conn.readTimeout = VERSION_TIMEOUT_MS
+            conn.instanceFollowRedirects = false
+            cookieHeader(url)?.let { conn.setRequestProperty("Cookie", it) }
+            if (conn.responseCode == 200) parseGitRevision(conn.inputStream.bufferedReader().readText()) else null
+        } finally {
+            conn.disconnect()
+        }
+    } catch (e: Exception) {
+        Log.w(StMobileApp.LOG_TAG, "version fetch failed: ${e.message}")
+        null
+    }
+
+    private fun cookieHeader(url: String): String? =
+        CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }
+
+    /** Runs on Chromium IO threads. Null means "let the WebView fetch it". */
+    private fun serveFromAssetCache(request: WebResourceRequest): WebResourceResponse? {
+        if (cacheDisabled()) return null
+        val rev = assetCache.revision ?: return null
+        val uri = request.url
+        if (uri.scheme != "http" && uri.scheme != "https") return null
+        if (!request.method.equals("GET", ignoreCase = true) || request.requestHeaders.containsKey("Range")) return null
+        if (!AssetCachePolicy.shouldCache("GET", uri.path ?: return null)) return null
+        val url = uri.toString()
+        assetCache.get(url)?.let { return WebResourceResponse(it.mime, it.encoding, it.bytes.inputStream()) }
+        return try {
+            val conn = URL(url).openConnection() as HttpURLConnection
+            try {
+                conn.connectTimeout = FETCH_TIMEOUT_MS
+                conn.readTimeout = FETCH_TIMEOUT_MS
+                conn.instanceFollowRedirects = false
+                request.requestHeaders["User-Agent"]?.let { conn.setRequestProperty("User-Agent", it) }
+                request.requestHeaders["Accept-Language"]?.let { conn.setRequestProperty("Accept-Language", it) }
+                cookieHeader(url)?.let { conn.setRequestProperty("Cookie", it) }
+                if (conn.responseCode != 200) return null
+                val contentType = conn.contentType ?: return null
+                val mime = contentType.substringBefore(';').trim().ifEmpty { return null }
+                val charset = Regex("charset=([^;\\s]+)", RegexOption.IGNORE_CASE).find(contentType)
+                    ?.groupValues?.get(1)?.trim('"')
+                val bytes = conn.inputStream.use { it.readBytes() }
+                assetCache.put(url, mime, charset, bytes, expectedRevision = rev)
+                WebResourceResponse(mime, charset, bytes.inputStream())
+            } finally {
+                conn.disconnect()
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun startReadyPolling() {
@@ -327,6 +402,8 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         const val READY_PROBE = "(function(){if(location.pathname.indexOf('/login')===0)return 'login';" +
             "return (document.getElementById('preloader')===null&&document.getElementById('send_textarea')!==null)" +
             "?'ready':'wait';})()"
+        const val VERSION_TIMEOUT_MS = 5_000
+        const val FETCH_TIMEOUT_MS = 15_000
         const val POLL_INTERVAL_MS = 200L
         const val READY_TIMEOUT_MS = 60_000L
         const val OPEN_UI_SELECTOR = ".openDrawer, dialog[open], #dialogue_popup:not([style*=\"none\"]), " +

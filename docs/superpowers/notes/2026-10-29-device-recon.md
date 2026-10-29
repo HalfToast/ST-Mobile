@@ -34,4 +34,4 @@ Access URLs: http://127.0.0.1:8000 | Wi-Fi: http://192.168.1.2:8000 | Tailscale:
 ## Reload timings
 
 - Task 3, cold app start, logged in, WebView HTTP cache warm (not cleared; no asset interceptor yet): `ST_READY ms=13341` (12853 and 13012 on later cold starts after the readiness fix; 12012 after a renderer-kill reload). Login page alone: ~900-990 ms. True empty-cache number not measured (would need clearing app data, which logs out).
-(Task 4 to add cached numbers.)
+Task 4 (asset cache; ST_READY now measured from onPageStarted, so the 13341 above is not like-for-like): PENDING - phone was locked/dozing, so the four numbers (2 cold starts with `debug_disable_asset_cache` on, 2 warm-cache cold starts with it off) were not measured.

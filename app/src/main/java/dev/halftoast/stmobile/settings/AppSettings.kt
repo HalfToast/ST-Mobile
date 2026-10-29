@@ -37,12 +37,17 @@ class AppSettings(private val prefs: SharedPreferences) {
         get() = prefs.getString(KEY_KNOWN_HOST_KEY, null)
         set(value) = prefs.edit().putString(KEY_KNOWN_HOST_KEY, value).apply()
 
+    /** Debug-only A/B switch; callers must also check BuildConfig.DEBUG. */
+    val debugDisableAssetCache: Boolean
+        get() = prefs.getBoolean(KEY_DEBUG_DISABLE_ASSET_CACHE, false)
+
     companion object {
         const val DEFAULT_SERVER_URL = "http://100.101.102.103:8000"
         const val DEFAULT_SSH_HOST = "100.101.102.103"
         const val DEFAULT_SSH_PORT = 8022
         const val DEFAULT_ST_USER_DIR = "default-user"
 
+        private const val KEY_DEBUG_DISABLE_ASSET_CACHE = "debug_disable_asset_cache"
         private const val KEY_SERVER_URL = "server_url"
         private const val KEY_SSH_HOST = "ssh_host"
         private const val KEY_SSH_PORT = "ssh_port"
