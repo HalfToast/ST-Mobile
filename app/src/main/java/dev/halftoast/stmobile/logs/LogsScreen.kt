@@ -71,10 +71,11 @@ fun LogsScreen(shell: RemoteShell, onOpenSettings: () -> Unit, modifier: Modifie
     val lifecycle = LocalLifecycleOwner.current.lifecycle
 
     LaunchedEffect(kind, attempt) {
-        lines = emptyList()
-        error = null
-        hostKeyChanged = false
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            // Every (re)start re-emits the last 200 lines, so the buffer and any stale error reset here.
+            lines = emptyList()
+            error = null
+            hostKeyChanged = false
             try {
                 shell.stream(kind.command).collect { raw ->
                     val line = stripAnsi(raw).trimEnd('\r')

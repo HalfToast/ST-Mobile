@@ -9,7 +9,9 @@ native Control Center that manages the server over SSH. It has four tabs.
   optional keep-alive notification keeps the app loaded in the background.
 - **Panel**: status (online, uptime, CPU/RAM, battery, disk, cache, inventory), and the actions Start,
   Stop, Restart, Update, Backup and Clean cache. Stop, Clean cache and Update ask first. The whitelist
-  manager lets you add an IP and switch whitelist mode; switching it asks for confirmation.
+  manager lets you add an IP and switch whitelist mode; switching it asks for confirmation. Note: adding
+  an IP is permanent through the app (stpanel cannot remove entries; edit `config.yaml` on the tablet to
+  remove one), and it has only been tested by automated tests, not live.
 - **Stats**: every character with message count and last-active time, most recent first. Pull to refresh.
 - **Logs**: live server log or access log (last 1000 lines). Leaving the tab or backgrounding the app stops
   the remote `tail`.
