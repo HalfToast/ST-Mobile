@@ -172,6 +172,7 @@ class MainActivity : ComponentActivity() {
                 var chatSize by remember { mutableStateOf(IntSize.Zero) }
                 val imeTarget = WindowInsets.imeAnimationTarget
                 val sheetOpen = holder.sheetOpen.collectAsState()
+                val chatState = holder.state.collectAsState()
                 val density = LocalDensity.current
                 // The native screen drawn over Chat (sliding in, shown, or sliding out); null once Chat
                 // has settled. Chat stays composed under it until it fully covers Chat.
@@ -258,12 +259,16 @@ class MainActivity : ComponentActivity() {
                                 FloatingNav(
                                     position = fab,
                                     containerSize = { chatSize },
-                                    hidden = { navHidden(imeTarget.getBottom(density), sheetOpen.value) },
+                                    hidden = {
+                                        navHidden(imeTarget.getBottom(density), sheetOpen.value, chatState.value is ChatState.Unreachable)
+                                    },
                                     onMoved = {
                                         fab = it
                                         settings.fabPosition = it
                                     },
                                     onOpen = { screen = it },
+                                    // The user asked for it: no "never reload a working chat" guard here.
+                                    onRefresh = { holder.reload() },
                                     // Debug only: long-press kills the renderer to test recovery.
                                     debugLongPress = if (BuildConfig.DEBUG) {
                                         {

@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.systemGestureExclusion
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -60,19 +61,19 @@ private val IconSize = 20.dp
 private val EdgeMargin = 8.dp
 private val FanSpacing = 8.dp
 private const val IdleAlpha = 0.75f
-private val FanScreens = listOf(Screen.Panel, Screen.Stats, Screen.Logs)
 /** Where a hidden button is placed: far outside the window, so it neither draws nor takes touches. */
 private val HiddenOffset = IntOffset(-100_000, -100_000)
 
 /**
  * The Chat screen's navigation (mockup `navbar.html`, option B): a small round button resting on a
- * screen edge. Tapping it fans out Control Center, Stats and Logs toward the screen interior; a tap
- * anywhere else closes the fan. Dragging moves it; on release it snaps to the nearer edge and
+ * screen edge. Tapping it fans out Control Center, Stats, Logs and Reload ([onRefresh]) toward the
+ * screen interior; a tap anywhere else closes the fan. Dragging moves it; on release it snaps to the nearer edge and
  * [onMoved] reports the new spot. [debugLongPress] (debug builds only) runs on a long press.
  *
  * Call it inside the Chat box, after the chat; [containerSize] is that box's size. The button keeps
- * itself inside the system bars. While [hidden] (keyboard or list sheet open) it is placed off screen
- * and the fan closes at once.
+ * itself inside the system bars. While [hidden] (keyboard or list sheet open, Chat unreachable) it is
+ * placed off screen and the fan closes at once. It opts out of the system back-gesture zone, so a tap
+ * on it near the screen edge reaches it.
  *
  * Keyboard performance: it is composed with the same structure all the time, and [hidden], the insets
  * and the drag are read only in placement lambdas and at event time, so a keyboard animation never
@@ -86,6 +87,7 @@ fun FloatingNav(
     hidden: () -> Boolean,
     onMoved: (FabPosition) -> Unit,
     onOpen: (Screen) -> Unit,
+    onRefresh: () -> Unit,
     debugLongPress: (() -> Unit)?,
 ) {
     var open by remember { mutableStateOf(false) }
@@ -139,7 +141,7 @@ fun FloatingNav(
 
     fun Density.fab(area: IntRect) = fabLayout(
         currentPosition, area.width.toFloat(), area.height.toFloat(),
-        ButtonSize.toPx(), EdgeMargin.toPx(), FanSpacing.toPx(), FanScreens.size,
+        ButtonSize.toPx(), EdgeMargin.toPx(), FanSpacing.toPx(), FanItem.entries.size,
     )
 
     if (open) {
@@ -147,7 +149,7 @@ fun FloatingNav(
         Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { open = false } })
     }
     if (fanComposed) {
-        FanScreens.forEachIndexed { i, screen ->
+        FanItem.entries.forEachIndexed { i, item ->
             RoundButton(
                 fill = Color(palette.box).copy(alpha = 0.92f),
                 border = Color(palette.border),
@@ -173,11 +175,11 @@ fun FloatingNav(
                     .clickable(interactionSource = null, indication = stPressIndication(CircleShape)) {
                         if (open) {
                             open = false
-                            onOpen(screen)
+                            item.screen?.let(onOpen) ?: onRefresh()
                         }
                     },
             ) {
-                Icon(screen.icon, contentDescription = screen.title, Modifier.size(IconSize), tint = Color(palette.text))
+                Icon(item.icon, contentDescription = item.label, Modifier.size(IconSize), tint = Color(palette.text))
             }
         }
     }
@@ -194,6 +196,8 @@ fun FloatingNav(
                 val fab = fab(r)
                 r.topLeft + IntOffset((fab.restX + drag.x).roundToInt(), (fab.restY + drag.y).roundToInt())
             }
+            // HyperOS's edge back-gesture zone otherwise takes taps on the button's outer half.
+            .systemGestureExclusion()
             .semantics {
                 contentDescription = "Navigation"
                 onClick { open = !open; true }
@@ -267,6 +271,8 @@ object NavIcons {
     val Stats = lineIcon("Stats", "M5 20V11M12 20V5M19 20v-6")
     val Logs = lineIcon("Logs", "M5 7l4 4-4 4M11 17h8")
     val Dots = lineIcon("Dots", "M5 12h.01M12 12h.01M19 12h.01", strokeWidth = 3.2f)
+    /** A circular arrow: most of a circle, its arrowhead at the top right. */
+    val Refresh = lineIcon("Refresh", "M19 12a7 7 0 1 1-2.05-4.95", "M17.5 3.5v3.6h-3.6")
 
     private fun lineIcon(name: String, vararg paths: String, strokeWidth: Float = 1.8f): ImageVector =
         ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f).apply {
@@ -281,6 +287,9 @@ object NavIcons {
             }
         }.build()
 }
+
+val FanItem.icon: ImageVector
+    get() = screen?.icon ?: NavIcons.Refresh
 
 val Screen.icon: ImageVector
     get() = when (this) {

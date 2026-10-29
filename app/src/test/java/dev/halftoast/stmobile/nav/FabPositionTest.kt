@@ -46,10 +46,23 @@ class FabLayoutTest {
 }
 
 class NavHiddenTest {
-    @Test fun hiddenWhileKeyboardTargetIsUpOrSheetIsOpen() {
-        assertEquals(false, navHidden(imeTargetBottomPx = 0, sheetOpen = false))
-        assertEquals(true, navHidden(imeTargetBottomPx = 800, sheetOpen = false))
-        assertEquals(true, navHidden(imeTargetBottomPx = 0, sheetOpen = true))
-        assertEquals(true, navHidden(imeTargetBottomPx = 800, sheetOpen = true))
+    @Test fun hiddenWhileKeyboardTargetIsUpOrSheetIsOpenOrChatIsUnreachable() {
+        assertEquals(false, navHidden(imeTargetBottomPx = 0, sheetOpen = false, chatUnreachable = false))
+        assertEquals(true, navHidden(imeTargetBottomPx = 800, sheetOpen = false, chatUnreachable = false))
+        assertEquals(true, navHidden(imeTargetBottomPx = 0, sheetOpen = true, chatUnreachable = false))
+        assertEquals(true, navHidden(imeTargetBottomPx = 0, sheetOpen = false, chatUnreachable = true))
+        assertEquals(true, navHidden(imeTargetBottomPx = 800, sheetOpen = true, chatUnreachable = true))
+    }
+}
+
+class FanItemsTest {
+    @Test fun fanOffersTheScreensThenRefresh() {
+        assertEquals(
+            listOf(FanItem.ControlCenter, FanItem.Stats, FanItem.Logs, FanItem.Refresh),
+            FanItem.entries.toList(),
+        )
+        assertEquals(dev.halftoast.stmobile.Screen.Panel, FanItem.ControlCenter.screen)
+        assertEquals(null, FanItem.Refresh.screen)
+        assertEquals("Reload SillyTavern", FanItem.Refresh.label)
     }
 }
