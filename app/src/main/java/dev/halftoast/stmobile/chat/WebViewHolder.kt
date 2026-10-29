@@ -67,6 +67,7 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
     private var loadGeneration = 0
     private var mainFrameFailed = false
     private var pollingGeneration = -1
+    private var pendingHttpError: String? = null
     private var filePathCallback: ValueCallback<Array<Uri>>? = null
 
     private val multiPicker = activity.registerForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) {
@@ -113,6 +114,16 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
     /** Called every time the page finishes booting (preloader gone). */
     fun onStReady(callback: (elapsedMs: Long) -> Unit) {
         readyCallbacks += callback
+    }
+
+    /** Off-origin page in the WebView (e.g. OAuth provider) with history: step back instead of probing. */
+    fun goBackIfOffOrigin(): Boolean {
+        val url = webView.url?.let(Uri::parse) ?: return false
+        val port = if (url.port == -1) "" else ":${url.port}"
+        val origin = "${url.scheme}://${url.host}$port"
+        if (origin.equals(Downloads.originOf(appSettings.serverUrl), ignoreCase = true) || !webView.canGoBack()) return false
+        webView.goBack()
+        return true
     }
 
     /**
@@ -189,14 +200,18 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                 interceptor?.invoke(request)
 
-            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
-                openExternallyIfForeign(request.url)
-
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                 loadGeneration++
                 mainFrameFailed = false
                 loadStartedAt = SystemClock.elapsedRealtime()
-                _state.value = ChatState.Loading
+                // onReceivedHttpError fires before the navigation commits; keep its verdict.
+                val refused = pendingHttpError
+                if (refused != null) {
+                    mainFrameFailed = true
+                    _state.value = ChatState.Unreachable(refused)
+                } else {
+                    _state.value = ChatState.Loading
+                }
             }
 
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
@@ -208,11 +223,14 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
                     401 -> " Authentication required."
                     else -> ""
                 }
-                _state.value = ChatState.Unreachable("Server refused the connection ($code).$hint")
+                val reason = "Server refused the connection ($code).$hint"
+                pendingHttpError = reason
+                _state.value = ChatState.Unreachable(reason)
             }
 
             override fun onPageFinished(view: WebView, url: String?) {
                 CookieManager.getInstance().flush() // persist the login session promptly
+                pendingHttpError = null
                 if (!mainFrameFailed) startReadyPolling()
             }
 

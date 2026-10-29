@@ -105,6 +105,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleChatBack() {
+        if (holder.goBackIfOffOrigin()) return
         holder.probeBack { consumed ->
             val now = SystemClock.elapsedRealtime()
             when (BackPressPolicy.decide(consumed, lastUnconsumedBackAtMs, now)) {
