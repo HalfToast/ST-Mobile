@@ -94,6 +94,20 @@ data class StPalette(
     val online: Int,
 )
 
+/**
+ * Whether an opaque [argb] background wants dark system-bar icons: true when black contrasts with it
+ * more than white does (relative luminance above ~0.18).
+ */
+fun isLightBackground(argb: Int): Boolean {
+    fun channel(shift: Int): Double {
+        val c = ((argb shr shift) and 0xFF) / 255.0
+        return if (c <= 0.04045) c / 12.92 else Math.pow((c + 0.055) / 1.055, 2.4)
+    }
+    val luminance = 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0)
+    // Contrast with black (L + 0.05) / 0.05 beats contrast with white 1.05 / (L + 0.05).
+    return (luminance + 0.05) * (luminance + 0.05) > 0.05 * 1.05
+}
+
 fun StTheme.palette(): StPalette {
     val bg = composite(background, 0xFF000000.toInt())
     return StPalette(

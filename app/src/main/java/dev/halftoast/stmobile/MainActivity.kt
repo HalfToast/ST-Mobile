@@ -33,6 +33,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -77,6 +78,8 @@ import dev.halftoast.stmobile.stats.StatsViewModel
 import dev.halftoast.stmobile.ui.LocalStPalette
 import dev.halftoast.stmobile.ui.StMobileTheme
 import dev.halftoast.stmobile.ui.StTopBar
+import dev.halftoast.stmobile.ui.isLightBackground
+import dev.halftoast.stmobile.ui.palette
 
 enum class Screen(val title: String) {
     Chat("Chat"),
@@ -142,14 +145,14 @@ class MainActivity : ComponentActivity() {
                 if (it.isLiveServerPage) panelVm.onChatReady()
             }
         }
-        enableEdgeToEdge(
-            SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-            SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
-        )
+        applySystemBars(isLightBackground(app.themeStore.theme.value.palette().background))
         setContent {
             val theme by app.themeStore.theme.collectAsState()
             StMobileTheme(theme) {
                 val palette = LocalStPalette.current
+                // Status and gesture bar icons stay readable on a light ST theme too.
+                val lightBars = isLightBackground(palette.background)
+                LaunchedEffect(lightBars) { applySystemBars(lightBars) }
                 var screen by rememberSaveable { mutableStateOf(Screen.Chat) }
                 var overlay by rememberSaveable { mutableStateOf(Overlay.None) }
                 // Chat works without SSH; Panel, Stats and Logs show Setup until it's done.
@@ -283,6 +286,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    /** Edge-to-edge with transparent bars; dark icons over a [light] background, light ones otherwise. */
+    private fun applySystemBars(light: Boolean) {
+        val clear = android.graphics.Color.TRANSPARENT
+        val style = if (light) SystemBarStyle.light(clear, clear) else SystemBarStyle.dark(clear)
+        enableEdgeToEdge(style, style)
     }
 
     override fun onStart() {

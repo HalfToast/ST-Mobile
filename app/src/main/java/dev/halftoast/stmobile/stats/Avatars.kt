@@ -72,8 +72,26 @@ class AvatarCache<T : Any>(private val maxEntries: Int, private val fetch: suspe
 
 private class FetchAbandoned : RuntimeException()
 
-/** Fetches an avatar with the WebView's ST session cookie. Any failure is null; nothing is logged (private data). */
-fun httpAvatarFetch(serverUrl: () -> String): suspend (String) -> ImageBitmap? = { file ->
+/**
+ * The power-of-two `inSampleSize` that shrinks a [width]×[height] image as far as possible while its
+ * shorter side stays at least [targetPx]. 1 for anything unknown.
+ */
+fun avatarSampleSize(width: Int, height: Int, targetPx: Int): Int {
+    if (width <= 0 || height <= 0 || targetPx <= 0) return 1
+    var sample = 1
+    while (minOf(width, height) / (sample * 2) >= targetPx) sample *= 2
+    return sample
+}
+
+/** Largest avatar body read; anything bigger is not an avatar worth showing. */
+private const val MAX_AVATAR_BYTES = 16 * 1024 * 1024
+
+/**
+ * Fetches an avatar with the WebView's ST session cookie and decodes it downsampled to about
+ * [targetPx] (ST serves full-size images when its thumbnails are turned off). Any failure, including
+ * running out of memory, is null; nothing is logged (private data).
+ */
+fun httpAvatarFetch(targetPx: Int, serverUrl: () -> String): suspend (String) -> ImageBitmap? = { file ->
     withContext(Dispatchers.IO) {
         var conn: HttpURLConnection? = null
         try {
@@ -85,11 +103,20 @@ fun httpAvatarFetch(serverUrl: () -> String): suspend (String) -> ImageBitmap? =
                 CookieManager.getInstance().getCookie(base)?.let { setRequestProperty("Cookie", it) }
             }
             if (!isImageResponse(conn.responseCode, conn.contentType)) null
-            else conn.inputStream.use { BitmapFactory.decodeStream(it) }?.asImageBitmap()
-        } catch (e: Exception) {
+            else if (conn.contentLengthLong > MAX_AVATAR_BYTES) null
+            else decodeAvatar(conn.inputStream.use { it.readBytes() }, targetPx)
+        } catch (e: Throwable) {
             null
         } finally {
             conn?.disconnect()
         }
     }
+}
+
+private fun decodeAvatar(bytes: ByteArray, targetPx: Int): ImageBitmap? {
+    if (bytes.size > MAX_AVATAR_BYTES) return null
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    val options = BitmapFactory.Options().apply { inSampleSize = avatarSampleSize(bounds.outWidth, bounds.outHeight, targetPx) }
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
 }

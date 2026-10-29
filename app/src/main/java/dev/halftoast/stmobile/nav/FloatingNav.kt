@@ -1,5 +1,6 @@
 package dev.halftoast.stmobile.nav
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -86,6 +87,9 @@ fun FloatingNav(
     val currentOnMoved by rememberUpdatedState(onMoved)
     val currentLongPress by rememberUpdatedState(debugLongPress)
     val currentHidden by rememberUpdatedState(hidden)
+
+    // Back closes an open fan first.
+    BackHandler(enabled = open) { open = false }
 
     // The keyboard or a sheet appeared: close the fan at once.
     LaunchedEffect(Unit) {

@@ -25,6 +25,7 @@ class StMobileApp : Application() {
     companion object {
         const val LOG_TAG = "STMobile"
         const val KEEPALIVE_CHANNEL_ID = "keepalive"
+        private const val AVATAR_DP = 40
     }
 
     val settings: AppSettings by lazy { AppSettings(getSharedPreferences("settings", Context.MODE_PRIVATE)) }
@@ -45,7 +46,11 @@ class StMobileApp : Application() {
     val themeStore by lazy { ThemeStore({ settings.stThemeJson }, { settings.stThemeJson = it }) }
 
     /** Character avatars fetched from ST's thumbnail endpoint, shared by every screen. */
-    val avatars by lazy { AvatarCache(200, httpAvatarFetch { settings.serverUrl }) }
+    val avatars by lazy {
+        // Decoded at about twice the 40 dp avatar circle.
+        val targetPx = (2 * AVATAR_DP * resources.displayMetrics.density).toInt()
+        AvatarCache(200, httpAvatarFetch(targetPx) { settings.serverUrl })
+    }
 
     override fun onCreate() {
         super.onCreate()

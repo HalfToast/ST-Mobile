@@ -125,9 +125,13 @@ class WebViewHolder(
         }
     }
 
-    fun detach() {
-        (webView.parent as? ViewGroup)?.removeView(webView)
-        parent = null
+    /**
+     * [parent] is going away. Only takes the WebView out if it is still in [parent]: a newer parent may
+     * already hold it (screen transitions can attach the next host before the old one is released).
+     */
+    fun detach(parent: ViewGroup) {
+        if (webView.parent === parent) parent.removeView(webView)
+        if (this.parent === parent) this.parent = null
     }
 
     fun reload() {
@@ -355,19 +359,6 @@ class WebViewHolder(
      * Polls for SillyTavern's UI on a server page. Keeps polling after the ready deadline (Stalled),
      * more slowly, so a slow boot still ends up Ready; gives up after [POLL_GIVE_UP_MS].
      */
-    private fun readTheme(view: WebView, gen: Int) {
-        view.evaluateJavascript(ThemeBridge.readAndWatchScript()) { raw ->
-            if (!isCurrent(gen, view) || raw == null || raw == "null") return@evaluateJavascript
-            val vars = try {
-                JSONArray("[$raw]").optString(0)
-            } catch (_: Exception) {
-                null
-            }?.let(ThemeBridge::parseMessage) ?: return@evaluateJavascript
-            Log.i(StMobileApp.LOG_TAG, "ST_THEME accent=${vars["--SmartThemeQuoteColor"]}")
-            onTheme(vars)
-        }
-    }
-
     private fun startReadyPolling() {
         val gen = loadGeneration
         if (pollingGeneration == gen) return
@@ -398,6 +389,20 @@ class WebViewHolder(
             }
         }
         mainHandler.post(poll)
+    }
+
+    /** Reads ST's theme once the page is Ready (and arms the page's theme watcher). */
+    private fun readTheme(view: WebView, gen: Int) {
+        view.evaluateJavascript(ThemeBridge.readAndWatchScript()) { raw ->
+            if (!isCurrent(gen, view) || raw == null || raw == "null") return@evaluateJavascript
+            val vars = try {
+                JSONArray("[$raw]").optString(0)
+            } catch (_: Exception) {
+                null
+            }?.let(ThemeBridge::parseMessage) ?: return@evaluateJavascript
+            Log.i(StMobileApp.LOG_TAG, "ST_THEME accent=${ThemeBridge.logValue(vars["--SmartThemeQuoteColor"])}")
+            onTheme(vars)
+        }
     }
 
     /** The page's sheet opened or closed. An open sheet only counts on the current, Ready page. */

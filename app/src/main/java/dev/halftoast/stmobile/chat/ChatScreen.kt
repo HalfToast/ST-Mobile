@@ -50,7 +50,7 @@ fun ChatScreen(holder: WebViewHolder, onOpenControlCenter: () -> Unit, modifier:
         AndroidView(
             modifier = Modifier.fillMaxSize(),
             factory = { ctx -> FrameLayout(ctx).also { holder.attach(it) } },
-            onRelease = { holder.detach() },
+            onRelease = { holder.detach(it) },
         )
         when (val s = state) {
             ChatState.Loading -> {

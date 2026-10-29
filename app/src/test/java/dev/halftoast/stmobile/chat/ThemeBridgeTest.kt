@@ -30,4 +30,11 @@ class ThemeBridgeTest {
         assertTrue(s.contains("if(j===window.__stmThemeSent)return;"))
         assertTrue("throttle kept", s.contains("300-(Date.now()-last)"))
     }
+
+    @Test fun loggedValueIsShortAndOnOneLine() {
+        assertEquals("rgba(170, 219, 255, 1)", ThemeBridge.logValue("rgba(170, 219, 255, 1)"))
+        assertEquals("redgreen", ThemeBridge.logValue("red\n\r\u0000green\u001b"))
+        assertEquals("x".repeat(64), ThemeBridge.logValue("x".repeat(4000)))
+        assertEquals("null", ThemeBridge.logValue(null))
+    }
 }

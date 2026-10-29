@@ -2,6 +2,8 @@ package dev.halftoast.stmobile.ui
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StThemeTest {
@@ -66,5 +68,14 @@ class StThemeTest {
         s.update(emptyMap()); s.update(mapOf("--SmartThemeQuoteColor" to ""))
         assertEquals(0xFFFF0000.toInt(), s.theme.value.accent)
         assertEquals(1, saved)
+    }
+
+    @Test fun systemBarIconsContrastWithTheBackground() {
+        assertFalse("Glimmer: light icons", isLightBackground(0xFF18181B.toInt()))
+        assertFalse(isLightBackground(0xFF555555.toInt()))
+        assertTrue("light ST theme: dark icons", isLightBackground(0xFFF0F0F0.toInt()))
+        assertTrue(isLightBackground(0xFFFFFFFF.toInt()))
+        assertTrue("mid-light grey: dark icons read better", isLightBackground(0xFFBBBBBB.toInt()))
+        assertFalse(isLightBackground(0xFF000000.toInt()))
     }
 }

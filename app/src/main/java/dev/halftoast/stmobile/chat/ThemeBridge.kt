@@ -17,6 +17,9 @@ object ThemeBridge {
     const val NAME = "STMobileTheme"
     private const val MAX_MESSAGE_CHARS = 4096
 
+    /** A page-controlled value as it may appear in the log: control characters dropped, at most 64 chars. */
+    fun logValue(value: String?): String = value?.filterNot(Char::isISOControl)?.take(64) ?: "null"
+
     /** A JSON object of string values; unknown keys are dropped. Null for anything else or oversized input. */
     fun parseMessage(json: String): Map<String, String>? {
         if (json.length > MAX_MESSAGE_CHARS) return null

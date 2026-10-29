@@ -66,4 +66,14 @@ class AvatarsTest {
         runCurrent(); gate.complete(Unit)
         assertEquals("img", x.await()); assertEquals("img", y.await()); assertEquals(1, calls)
     }
+
+    @Test fun sampleSizeShrinksBigImagesToAboutTheTarget() {
+        assertEquals(1, avatarSampleSize(96, 144, 220))     // ST's own thumbnail: as is
+        assertEquals(1, avatarSampleSize(400, 600, 220))    // halving would drop below the target
+        assertEquals(2, avatarSampleSize(512, 768, 220))
+        assertEquals(4, avatarSampleSize(1000, 1500, 220))
+        assertEquals(16, avatarSampleSize(4096, 4096, 220))
+        assertEquals(1, avatarSampleSize(0, 0, 220)); assertEquals(1, avatarSampleSize(-1, 500, 220))
+        assertEquals(1, avatarSampleSize(1000, 1000, 0))
+    }
 }
