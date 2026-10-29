@@ -31,6 +31,7 @@
   var SEARCH_ABOVE = 8;
   var SWIPE_CLOSE_PX = 80;
   var CLOSE_MS = 200;
+  var CLIP_SUPPORTED = !!(window.CSS && window.CSS.supports && window.CSS.supports('overflow', 'clip'));
   // Rows rendered beyond each edge of the visible part of the list, in px.
   var BUFFER_PX = 400;
   // The tap that opened the sheet must not also hit it. A click only counts after a pointerdown
@@ -380,8 +381,10 @@
       root.classList.add('stm-open');
       root.showModal();
       // Where overflow:clip is unsupported, undo the scroll that focusing the grab area did.
-      root.scrollTop = 0;
-      panel.scrollTop = 0;
+      if (!CLIP_SUPPORTED) {
+        root.scrollTop = 0;
+        panel.scrollTop = 0;
+      }
       clearRendered();
       heights = measure();
       buildEntries('');
