@@ -1,7 +1,9 @@
 package dev.halftoast.stmobile.chat
 
 import android.annotation.SuppressLint
+import android.content.Intent
 import android.graphics.Bitmap
+import android.os.Message
 import android.app.DownloadManager
 import android.content.ContentValues
 import android.net.Uri
@@ -177,6 +179,7 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
             @Suppress("DEPRECATION")
             databaseEnabled = true
             mediaPlaybackRequiresUserGesture = false
+            setSupportMultipleWindows(true)
             mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
         }
         CookieManager.getInstance().setAcceptCookie(true)
@@ -185,6 +188,9 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                 interceptor?.invoke(request)
+
+            override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean =
+                openExternallyIfForeign(request.url)
 
             override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
                 loadGeneration++
@@ -226,6 +232,31 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         }
 
         webChromeClient = object : WebChromeClient() {
+            /** target=_blank / window.open: never open a second WebView; hand the URL to the browser. */
+            override fun onCreateWindow(view: WebView, isDialog: Boolean, isUserGesture: Boolean, resultMsg: Message): Boolean {
+                val popup = WebView(activity)
+                var handled = false
+                fun handle(uri: Uri) {
+                    if (handled || uri.scheme == "about") return
+                    handled = true
+                    if (!openExternallyIfForeign(uri)) view.loadUrl(uri.toString()) // same origin: stay here
+                    handler.post { popup.destroy() }
+                }
+                popup.webViewClient = object : WebViewClient() {
+                    override fun shouldOverrideUrlLoading(v: WebView, request: WebResourceRequest): Boolean {
+                        handle(request.url)
+                        return true
+                    }
+
+                    override fun onPageStarted(v: WebView, url: String?, favicon: Bitmap?) {
+                        url?.let { handle(Uri.parse(it)) }
+                    }
+                }
+                (resultMsg.obj as WebView.WebViewTransport).webView = popup
+                resultMsg.sendToTarget()
+                return true
+            }
+
             override fun onShowFileChooser(
                 view: WebView,
                 callback: ValueCallback<Array<Uri>>,
@@ -250,6 +281,21 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         setDownloadListener { url, userAgent, contentDisposition, mimeType, _ ->
             downloads.onDownloadStart(this, url, userAgent, contentDisposition, mimeType)
         }
+    }
+
+    /** True (and launches the default browser) for http(s) URLs outside the server origin. */
+    private fun openExternallyIfForeign(uri: Uri): Boolean {
+        val scheme = uri.scheme?.lowercase()
+        if (scheme != "http" && scheme != "https") return false // blob:, data:, etc. untouched
+        val port = if (uri.port == -1) "" else ":${uri.port}"
+        val origin = "$scheme://${uri.host}$port"
+        if (origin.equals(Downloads.originOf(appSettings.serverUrl), ignoreCase = true)) return false
+        try {
+            activity.startActivity(Intent(Intent.ACTION_VIEW, uri).addCategory(Intent.CATEGORY_BROWSABLE))
+        } catch (e: Exception) {
+            Log.w(StMobileApp.LOG_TAG, "no browser for $uri", e)
+        }
+        return true
     }
 
     /** SAF wants MIME types; ST sends extensions like ".png" too. */
