@@ -37,6 +37,10 @@ class AppSettings(private val prefs: SharedPreferences) {
         get() = prefs.getString(KEY_KNOWN_HOST_KEY, null)
         set(value) = prefs.edit().putString(KEY_KNOWN_HOST_KEY, value).apply()
 
+    var stThemeJson: String?
+        get() = prefs.getString(KEY_ST_THEME_JSON, null)
+        set(value) = prefs.edit().putString(KEY_ST_THEME_JSON, value).apply()
+
     /** Debug-only A/B switch; callers must also check BuildConfig.DEBUG. */
     val debugDisableAssetCache: Boolean
         get() = prefs.getBoolean(KEY_DEBUG_DISABLE_ASSET_CACHE, false)
@@ -56,6 +60,7 @@ class AppSettings(private val prefs: SharedPreferences) {
         private const val KEY_KEEP_ALIVE = "keep_alive_enabled"
         private const val KEY_SETUP_COMPLETE = "setup_complete"
         private const val KEY_KNOWN_HOST_KEY = "known_host_key"
+        private const val KEY_ST_THEME_JSON = "st_theme_json"
 
         fun isValidServerUrl(url: String): Boolean {
             val trimmed = url.trim()
