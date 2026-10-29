@@ -1,0 +1,8 @@
+[1m[1;36m=== SillyTavern Quick Backup ===[0m
+
+Compressing characters, chats, worlds, and settings...
+[2m(Excluding internal auto-backups for speed and compact size)[0m
+
+[1;32m✓ Backup successfully created![0m
+  Location: [1;37m/data/data/com.termux/files/home/SillyTavern/backups/st_backup_20261029_100000.tar.gz[0m
+  Archive Size: [1;36m12M[0m

@@ -1,0 +1,3 @@
+[1m[1;36m=== Updating SillyTavern (git pull) ===[0m
+
+Already up to date.
