@@ -68,6 +68,7 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
 
     private val assetCache = AssetCache(File(activity.cacheDir, "asset-cache"))
     private var navToken = 0
+    private val resolvingAfterReady = java.util.concurrent.atomic.AtomicBoolean(false)
 
     private val readyCallbacks = mutableListOf<(Long) -> Unit>()
     private var parent: ViewGroup? = null
@@ -105,6 +106,14 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
     fun detach() {
         (webView.parent as? ViewGroup)?.removeView(webView)
         parent = null
+    }
+
+    /**
+     * Drops every cached asset and re-resolves the server revision, then reloads (call after a successful ST update).
+     */
+    fun revalidate() {
+        _state.value = ChatState.Loading
+        webView.loadUrlTimed(clearFirst = true)
     }
 
     fun reload() {
@@ -158,15 +167,44 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
 
     private fun cacheDisabled() = BuildConfig.DEBUG && appSettings.debugDisableAssetCache
 
-    /** Resolves the server's git revision (off the main thread), then loads; the cache is namespaced by it. */
-    private fun WebView.loadUrlTimed() {
+    /** Resolves the cache namespace (off the main thread, total wait capped), then loads. */
+    private fun WebView.loadUrlTimed(clearFirst: Boolean = false) {
         val serverUrl = appSettings.serverUrl
         val token = ++navToken
         thread(name = "st-version") {
-            val revision = if (cacheDisabled()) null else fetchRevision(serverUrl)
+            if (clearFirst) assetCache.clear()
+            val start = SystemClock.elapsedRealtime()
+            val revision = if (cacheDisabled()) null else resolveRevision(serverUrl)
             assetCache.setRevision(revision)
+            Log.i(StMobileApp.LOG_TAG, "VERSION_WAIT ms=${SystemClock.elapsedRealtime() - start} revision=${revision ?: "null"}")
             handler.post {
                 if (token == navToken) this@WebViewHolder.webView.loadUrl(serverUrl)
+            }
+        }
+    }
+
+    /** Hard 5 s ceiling on the whole /version round trip (connect + read are each capped too). */
+    private fun resolveRevision(serverUrl: String): String? {
+        val task = java.util.concurrent.FutureTask<String?> { fetchRevision(serverUrl) }
+        thread(isDaemon = true, name = "st-version-fetch") { task.run() }
+        return try {
+            task.get(VERSION_TIMEOUT_MS.toLong(), java.util.concurrent.TimeUnit.MILLISECONDS)
+        } catch (e: Exception) {
+            task.cancel(true)
+            null
+        }
+    }
+
+    /** /version needs a session, so a fresh login loads uncached; once Ready, resolve it for later loads. */
+    private fun resolveRevisionAfterReady() {
+        if (cacheDisabled() || assetCache.revision != null) return
+        if (!resolvingAfterReady.compareAndSet(false, true)) return
+        val serverUrl = appSettings.serverUrl
+        thread(name = "st-version-late") {
+            try {
+                resolveRevision(serverUrl)?.let { assetCache.setRevision(it) }
+            } finally {
+                resolvingAfterReady.set(false)
             }
         }
     }
@@ -179,7 +217,7 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
             conn.readTimeout = VERSION_TIMEOUT_MS
             conn.instanceFollowRedirects = false
             cookieHeader(url)?.let { conn.setRequestProperty("Cookie", it) }
-            if (conn.responseCode == 200) parseGitRevision(conn.inputStream.bufferedReader().readText()) else null
+            if (conn.responseCode == 200) parseCacheNamespace(conn.inputStream.bufferedReader().readText()) else null
         } finally {
             conn.disconnect()
         }
@@ -242,6 +280,7 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
                         val elapsed = SystemClock.elapsedRealtime() - loadStartedAt
                         Log.i(StMobileApp.LOG_TAG, "ST_READY ms=$elapsed")
                         _state.value = ChatState.Ready
+                        resolveRevisionAfterReady()
                         readyCallbacks.toList().forEach { it(elapsed) }
                     }
                     "\"login\"" -> _state.value = ChatState.LoginRequired

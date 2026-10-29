@@ -6,9 +6,12 @@ import java.security.MessageDigest
 
 data class CachedAsset(val mime: String, val encoding: String?, val bytes: ByteArray)
 
-/** Reads `gitRevision` from SillyTavern's `/version` JSON; null if absent or unparseable. */
-fun parseGitRevision(versionJson: String): String? = try {
-    JSONObject(versionJson).optString("gitRevision", "").takeIf { it.isNotBlank() && it != "null" }
+/** Cache namespace "<pkgVersion>@<gitRevision>" from `/version` JSON; null if either is missing or unparseable. */
+fun parseCacheNamespace(versionJson: String): String? = try {
+    val o = JSONObject(versionJson)
+    val pkg = o.optString("pkgVersion", "").takeIf { it.isNotBlank() && it != "null" }
+    val rev = o.optString("gitRevision", "").takeIf { it.isNotBlank() && it != "null" }
+    if (pkg != null && rev != null) "$pkg@$rev" else null
 } catch (_: Exception) {
     null
 }
@@ -34,7 +37,7 @@ class AssetCache(private val root: File) {
         if (stored != revision) {
             wipe()
             root.mkdirs()
-            File(root, REVISION_FILE).writeText(revision)
+            writeAtomic(File(root, REVISION_FILE), revision.toByteArray())
         }
         this.revision = revision
     }
@@ -59,9 +62,9 @@ class AssetCache(private val root: File) {
             try {
                 val (body, meta) = files(url)
                 root.mkdirs()
-                meta.delete()
-                body.writeBytes(bytes)
-                meta.writeText("$mime\n${encoding.orEmpty()}")
+                meta.delete() // a crash between the two renames leaves a miss, never a mismatched pair
+                writeAtomic(body, bytes)
+                writeAtomic(meta, "$mime\n${encoding.orEmpty()}".toByteArray())
             } catch (_: Exception) {
                 // disk full etc.: just don't cache
             }
@@ -70,6 +73,15 @@ class AssetCache(private val root: File) {
     fun clear() = synchronized(lock) {
         wipe()
         revision = null
+    }
+
+    private fun writeAtomic(target: File, data: ByteArray) {
+        val tmp = File(target.parentFile, target.name + ".tmp")
+        tmp.writeBytes(data)
+        if (!tmp.renameTo(target)) {
+            tmp.delete()
+            throw java.io.IOException("rename failed for ${target.name}")
+        }
     }
 
     private fun wipe() {
