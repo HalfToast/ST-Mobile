@@ -44,8 +44,16 @@ private const val WL_ON = "mode=true\nentry=127.0.0.1\n"
 private const val NO_HTTP = "online=1\npid=9824\nhttp_code=000\nlatency_s=0\nbranch=staging\ncommit=ad29cbda6\nbehind=0\n"
 private const val OFFLINE = "online=0\nbranch=staging\ncommit=ad29cbda6\nbehind=0\n"
 
-/** Records every exec; answers dashboard/whitelist probes and stpanel subcommands with canned output. */
+/** The command inside [Probes.wrapDetached], or [command] itself when it isn't wrapped. */
+fun unwrapDetached(command: String): String =
+    Regex("""\( trap '' HUP; \( (.*)\n\)""").find(command)?.groupValues?.get(1) ?: command
+
+/**
+ * Records every exec; answers dashboard/whitelist probes and stpanel subcommands with canned output.
+ * [commands] holds actions unwrapped; [rawCommands] holds what was actually sent.
+ */
 class FakeRemoteShell : RemoteShell {
+    val rawCommands = mutableListOf<String>()
     val commands = mutableListOf<String>()
     /** Commands that ran to the end (their delay elapsed without cancellation). */
     val completed = mutableListOf<String>()
@@ -68,23 +76,25 @@ class FakeRemoteShell : RemoteShell {
     fun timeoutFor(prefix: String): Long? = calls.firstOrNull { it.first.contains(prefix) }?.third
 
     override suspend fun exec(command: String, stdin: String?, timeoutMs: Long, signalOnCancel: Boolean): ExecResult {
-        commands += command
-        signals += command to signalOnCancel
-        calls += Triple(command, stdin, timeoutMs)
-        if (command == DASHBOARD_CMD) dashboardCalls++
+        rawCommands += command
+        val cmd = unwrapDetached(command)
+        commands += cmd
+        signals += cmd to signalOnCancel
+        calls += Triple(cmd, stdin, timeoutMs)
+        if (cmd == DASHBOARD_CMD) dashboardCalls++
         if (delayMs > 0) delay(delayMs)
-        if (actionDelayMs > 0 && command.startsWith("stpanel")) delay(actionDelayMs)
+        if (actionDelayMs > 0 && cmd.startsWith("stpanel")) delay(actionDelayMs)
         failure?.let { throw it }
-        completed += command
+        completed += cmd
         val out = when {
-            command == DASHBOARD_CMD -> next(dashboards)
-            command == WHITELIST_CMD -> next(whitelists)
-            command == "stpanel update" -> updateOutput
-            command == "stpanel backup" -> "✓ Backup successfully created!\n  Archive Size: 12M\n"
-            command == "stpanel clean" -> "✓ Cache successfully cleared!\n"
-            command == "stpanel whitelist" && stdin?.startsWith("2\n") == true ->
+            cmd == DASHBOARD_CMD -> next(dashboards)
+            cmd == WHITELIST_CMD -> next(whitelists)
+            cmd == "stpanel update" -> updateOutput
+            cmd == "stpanel backup" -> "✓ Backup successfully created!\n  Archive Size: 12M\n"
+            cmd == "stpanel clean" -> "✓ Cache successfully cleared!\n"
+            cmd == "stpanel whitelist" && stdin?.startsWith("2\n") == true ->
                 "✓ Added ${stdin.lines()[1]} to whitelist!\n(Note: Restart SillyTavern for config changes to take effect)\n"
-            command == "stpanel whitelist" && stdin == "1\n" ->
+            cmd == "stpanel whitelist" && stdin == "1\n" ->
                 "✓ Whitelist Mode toggled to: ENABLED\n(Note: Restart SillyTavern for config changes to take effect)\n"
             else -> ""
         }
@@ -138,6 +148,12 @@ class PanelViewModelTest {
     // --- From the brief, verbatim ---
 
     @Test fun stopNeedsConfirm() = runTest { vm.request(PanelAction.Stop); assertEquals(PanelAction.Stop, vm.ui.value.pendingConfirm); assertTrue(shell.commands.none { it.contains("stpanel stop") }) }
+    @Test fun actionsAndWhitelistRunDetached() = runTest {
+        vm.request(PanelAction.Start); advanceUntilIdle()
+        vm.addWhitelistEntry("192.168.1.50"); advanceUntilIdle()
+        assertTrue(Probes.wrapDetached("stpanel start") in shell.rawCommands)
+        assertTrue(Probes.wrapDetached("stpanel whitelist") in shell.rawCommands)
+    }
     @Test fun startRunsWithoutConfirm() = runTest { vm.request(PanelAction.Start); advanceUntilIdle(); assertTrue(shell.commands.any { it.contains("stpanel start") }) }
     @Test fun cleanFeedsYes() = runTest { vm.request(PanelAction.CleanCache); vm.confirm(); advanceUntilIdle(); assertEquals("y\n", shell.stdinFor("stpanel clean")) }
     @Test fun whitelistAddFeedsChoiceAndIp() = runTest { vm.addWhitelistEntry("192.168.1.50"); advanceUntilIdle(); assertEquals("2\n192.168.1.50\n", shell.stdinFor("stpanel whitelist")); assertTrue(vm.ui.value.restartSuggested) }

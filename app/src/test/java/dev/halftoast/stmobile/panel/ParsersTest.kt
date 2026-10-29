@@ -103,8 +103,7 @@ class ParsersTest {
     }
 
     @Test fun actionCommands() {
-        assertEquals("stpanel start", Probes.action("start"))
-        assertEquals("stpanel status", Probes.action("status"))
-        assertEquals("x", Probes.wrapDetached("x"))
+        assertEquals(Probes.wrapDetached("stpanel start"), Probes.action("start"))
+        assertEquals("stpanel status", unwrapDetached(Probes.action("status")))
     }
 }

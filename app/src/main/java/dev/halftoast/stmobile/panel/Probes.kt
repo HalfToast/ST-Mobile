@@ -19,10 +19,23 @@ object Probes {
     fun action(sub: String): String = wrapDetached("stpanel $sub")
 
     /**
-     * Pass-through: recon showed `stpanel restart` already survives the SSH session ending
-     * (startst daemonises), so no setsid/nohup wrapper is needed. Single place to change this later.
+     * Runs [cmd] in the background with its stdin, stdout and stderr in a temp dir, then replays
+     * them and its exit code. If the channel closes first (action timeout, app killed), nothing
+     * writes to the dead pipe, so SIGPIPE can't kill stpanel, git or npm halfway; the command
+     * finishes and the temp dir is still removed (the wrapper ignores SIGPIPE, the command doesn't).
      */
-    fun wrapDetached(cmd: String): String = cmd
+    fun wrapDetached(cmd: String): String = """
+        d=$(mktemp -d) || exit 1
+        cat >"${'$'}d/in"
+        ( trap '' HUP; ( $cmd
+        ) <"${'$'}d/in" >"${'$'}d/out" 2>"${'$'}d/err"; echo ${'$'}? >"${'$'}d/rc" ) </dev/null >/dev/null 2>&1 &
+        trap '' PIPE
+        wait ${'$'}!
+        cat "${'$'}d/out"; cat "${'$'}d/err" >&2
+        rc=$(cat "${'$'}d/rc" 2>/dev/null); [ -n "${'$'}rc" ] || rc=1
+        rm -rf "${'$'}d"
+        exit "${'$'}rc"
+    """.trimIndent()
 
     /** Re-checks the (untrusted, possibly pre-validation) user dir and single-quotes it. */
     internal fun build(asset: String, userDir: String, interpreter: String, load: (String) -> String): Pair<String, String> {
