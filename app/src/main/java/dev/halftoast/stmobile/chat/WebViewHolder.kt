@@ -188,14 +188,11 @@ class WebViewHolder(
             result(consumed)
         }
         mainHandler.postDelayed({ answer(false) }, PROBE_BACK_TIMEOUT_MS)
-        view.evaluateJavascript(
-            "(function(){var n=document.querySelectorAll('$OPEN_UI_SELECTOR').length;" +
-                "var d=document.querySelectorAll('dialog[open]'),t=d[d.length-1];if(t){t.dispatchEvent(new Event('cancel',{cancelable:true}));}else{(document.activeElement||document).dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));}return n;})()",
-        ) { beforeRaw ->
+        view.evaluateJavascript(BACK_PROBE_JS) { beforeRaw ->
             val before = beforeRaw?.toIntOrNull() ?: 0
             mainHandler.postDelayed({
                 if (destroyed || view !== webView) return@postDelayed answer(false)
-                view.evaluateJavascript("document.querySelectorAll('$OPEN_UI_SELECTOR').length") { afterRaw ->
+                view.evaluateJavascript(OPEN_UI_COUNT_JS) { afterRaw ->
                     val after = afterRaw?.toIntOrNull() ?: before
                     answer(after < before)
                 }
@@ -620,8 +617,27 @@ class WebViewHolder(
         const val POPUP_TIMEOUT_MS = 10_000L
         const val MAX_CRASH_RELOADS = 3
         const val CRASH_WINDOW_MS = 60_000L
-        const val OPEN_UI_SELECTOR = ".openDrawer, dialog[open], #dialogue_popup:not([style*=\"none\"]), " +
-            "#character_popup:not([style*=\"none\"]), #select_chat_popup:not([style*=\"none\"]), " +
-            "#stm-select-sheet.stm-open"
+        /**
+         * Open UI Back can close. The list sheet counts only while open (stm-open): it stays
+         * dialog[open] while sliding down, and counting that would make a Back that closed it look
+         * unconsumed ("Press back again").
+         */
+        const val OPEN_UI_SELECTOR = ".openDrawer, dialog[open]:not(#stm-select-sheet), " +
+            "#dialogue_popup:not([style*=\"none\"]), #character_popup:not([style*=\"none\"]), " +
+            "#select_chat_popup:not([style*=\"none\"]), #stm-select-sheet.stm-open"
+
+        /** Counts [OPEN_UI_SELECTOR]. */
+        const val OPEN_UI_COUNT_JS = "document.querySelectorAll('$OPEN_UI_SELECTOR').length"
+
+        /**
+         * Counts open UI, then sends `cancel` to the topmost open dialog (a sheet already sliding
+         * down is skipped, so a quick second Back reaches what is under it) or else Escape to the
+         * focused element. Evaluates to the count before.
+         */
+        const val BACK_PROBE_JS = "(function(){var n=$OPEN_UI_COUNT_JS;" +
+            "var d=document.querySelectorAll('dialog[open]:not(#stm-select-sheet:not(.stm-open))'),t=d[d.length-1];" +
+            "if(t){t.dispatchEvent(new Event('cancel',{cancelable:true}));}" +
+            "else{(document.activeElement||document).dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));}" +
+            "return n;})()"
     }
 }

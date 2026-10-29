@@ -32,4 +32,18 @@ class SelectSheetTest {
         val js = File("src/main/assets/${SelectSheet.ASSET_PATH}").readText()
         assertTrue(js.contains("${SelectSheet.BRIDGE_NAME}.postMessage"))
     }
+
+    @Test fun aSlidingSheetIsNotCountedAsAnOpenDialog() {
+        // The sheet stays dialog[open] while it slides down; only stm-open may count it.
+        assertTrue(WebViewHolder.OPEN_UI_SELECTOR.contains("dialog[open]:not(#stm-select-sheet)"))
+        assertTrue(!Regex("""dialog\[open\](?!:not\(#stm-select-sheet)""").containsMatchIn(WebViewHolder.OPEN_UI_SELECTOR))
+        assertTrue(WebViewHolder.BACK_PROBE_JS.contains(WebViewHolder.OPEN_UI_SELECTOR))
+        assertTrue(WebViewHolder.OPEN_UI_COUNT_JS.contains(WebViewHolder.OPEN_UI_SELECTOR))
+    }
+
+    @Test fun webTestRunsTheProbesExactJs() {
+        val html = File("src/test/web/select-sheet.test.html").readText()
+        assertTrue(html.contains("<script type=\"text/plain\" id=\"back-probe\">${WebViewHolder.BACK_PROBE_JS}</script>"))
+        assertTrue(html.contains("<script type=\"text/plain\" id=\"open-ui-count\">${WebViewHolder.OPEN_UI_COUNT_JS}</script>"))
+    }
 }

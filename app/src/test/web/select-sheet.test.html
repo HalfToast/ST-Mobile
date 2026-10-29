@@ -61,6 +61,10 @@
   <select id="size_four" size="4"><option>1</option><option>2</option><option>3</option><option>4</option></select>
   <select id="disabled_select" disabled><option>x</option></select>
 </div>
+<dialog id="st_popup"><p>An ST popup</p></dialog>
+<!-- WebViewHolder's back probe, verbatim (SelectSheetTest checks they match). -->
+<script type="text/plain" id="back-probe">(function(){var n=document.querySelectorAll('.openDrawer, dialog[open]:not(#stm-select-sheet), #dialogue_popup:not([style*="none"]), #character_popup:not([style*="none"]), #select_chat_popup:not([style*="none"]), #stm-select-sheet.stm-open').length;var d=document.querySelectorAll('dialog[open]:not(#stm-select-sheet:not(.stm-open))'),t=d[d.length-1];if(t){t.dispatchEvent(new Event('cancel',{cancelable:true}));}else{(document.activeElement||document).dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));}return n;})()</script>
+<script type="text/plain" id="open-ui-count">document.querySelectorAll('.openDrawer, dialog[open]:not(#stm-select-sheet), #dialogue_popup:not([style*="none"]), #character_popup:not([style*="none"]), #select_chat_popup:not([style*="none"]), #stm-select-sheet.stm-open').length</script>
 <script>
 (function () {
   var source = document.getElementById('chat_completion_source');
@@ -380,6 +384,36 @@
         ok(!dialog().open, 'closed at once');
       } finally {
         window.matchMedia = real;
+      }
+    },
+    backProbeSeesTheSheetClose: function () {
+      // The app's probe: count, send cancel, count again 150 ms later; fewer means Back was consumed.
+      function run(id) { return (0, eval)(document.getElementById(id).textContent); }
+      down(source);
+      var before = run('back-probe');
+      eq(before, 1, 'open sheet counted');
+      return wait(150).then(function () {
+        ok(dialog().open, 'still sliding down at 150 ms');
+        eq(run('open-ui-count'), 0, 'count at 150 ms');
+      });
+    },
+    quickSecondBackReachesThePopupUnderTheSheet: function () {
+      var popup = document.getElementById('st_popup');
+      var cancelled = 0;
+      function onCancel(e) { e.preventDefault(); cancelled++; popup.close(); }
+      popup.addEventListener('cancel', onCancel);
+      popup.showModal();
+      function run(id) { return (0, eval)(document.getElementById(id).textContent); }
+      try {
+        down(source);
+        eq(run('back-probe'), 2, 'popup and sheet');
+        ok(!sheet(), 'first Back closed the sheet');
+        eq(run('back-probe'), 1, 'only the popup counts while the sheet slides');
+        eq(cancelled, 1, 'second Back went to the popup');
+        eq(run('open-ui-count'), 0, 'nothing open');
+      } finally {
+        popup.removeEventListener('cancel', onCancel);
+        if (popup.open) popup.close();
       }
     },
     listBoxAndDisabledAreNotIntercepted: function () {
