@@ -20,7 +20,14 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
 import androidx.core.content.ContextCompat
 import dev.halftoast.stmobile.MainActivity
+import dev.halftoast.stmobile.R
 import dev.halftoast.stmobile.StMobileApp
+
+object KeepAliveCopy {
+    const val TITLE = "SillyTavern stays loaded"
+    const val TEXT = "Tap to open your chat"
+    const val COLOR = 0xFFA11B1B.toInt()
+}
 
 class KeepAliveService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
@@ -32,8 +39,10 @@ class KeepAliveService : Service() {
             this, 0, open, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
         val notification: Notification = NotificationCompat.Builder(this, StMobileApp.KEEPALIVE_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.stat_notify_sync_noanim)
-            .setContentTitle("ST Mobile is running")
+            .setSmallIcon(R.drawable.ic_stat_st)
+            .setContentTitle(KeepAliveCopy.TITLE)
+            .setContentText(KeepAliveCopy.TEXT)
+            .setColor(KeepAliveCopy.COLOR)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(pi)

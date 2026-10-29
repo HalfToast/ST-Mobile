@@ -1,0 +1,113 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>render-icons</title>
+<body data-result="">
+<!-- Renders ST's logo (tools/st-logo.svg) to the PNGs the app needs. Driven by tools/render-icons.sh. -->
+<script>
+// Net transform of both paths in logo.svg: layer translate(-779.42 -7.5519) then path translate(429.83 -2.2682).
+const NET_X = -349.59, NET_Y = -9.8201, LOGO_W = 329.35, LOGO_H = 307.64;
+const RED = '#a11b1b';
+
+function load(url) {
+  return new Promise((res, rej) => {
+    const x = new XMLHttpRequest();
+    x.open('GET', url);
+    x.onload = () => res(x.responseText);
+    x.onerror = () => rej(new Error('cannot read ' + url));
+    x.send();
+  });
+}
+
+function canvas(px) {
+  const c = document.createElement('canvas');
+  c.width = c.height = px;
+  return [c, c.getContext('2d')];
+}
+
+// Places the logo `wDp` dp wide with its top-left at (xDp, yDp), on a canvas of `dp` dp at `px` px.
+function place(ctx, px, dp, wDp, xDp, yDp) {
+  const k = px / dp;
+  const s = (wDp / LOGO_W) * k;
+  ctx.setTransform(s, 0, 0, s, xDp * k, yDp * k);
+  ctx.translate(NET_X, NET_Y);
+}
+
+function emit(name, c) {
+  const img = document.createElement('img');
+  img.dataset.out = name;
+  img.src = c.toDataURL('image/png');
+  document.body.appendChild(img);
+}
+
+// One-colour mark with the ST letters knocked out (gap = stroke of 8 svg units).
+function knockout(mark, letters, px, dp, wDp, xDp, yDp) {
+  const [c, ctx] = canvas(px);
+  place(ctx, px, dp, wDp, xDp, yDp);
+  ctx.fillStyle = '#fff';
+  ctx.fill(mark);
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fill(letters);
+  ctx.lineWidth = 8;
+  ctx.lineJoin = 'round';
+  ctx.stroke(letters);
+  return c;
+}
+
+(async () => {
+  try {
+    const svg = new DOMParser().parseFromString(await load('st-logo.svg'), 'image/svg+xml');
+    const mark = new Path2D(svg.getElementById('path9').getAttribute('d'));
+    const letters = new Path2D(svg.getElementById('path2').getAttribute('d'));
+    const dens = { mdpi: 1, hdpi: 1.5, xhdpi: 2, xxhdpi: 3, xxxhdpi: 4 };
+    const LH = LOGO_H / LOGO_W;
+
+    for (const [d, k] of Object.entries(dens)) {
+      // Adaptive monochrome layer: 108 dp, logo 60 dp wide centred in the safe zone.
+      emit(`mipmap-${d}/ic_launcher_monochrome.png`,
+        knockout(mark, letters, Math.round(108 * k), 108, 60, 24, 25.98));
+      // Notification: 24 dp, logo 22 dp wide, centred.
+      emit(`drawable-${d}/ic_stat_st.png`,
+        knockout(mark, letters, Math.round(24 * k), 24, 22, 1, (24 - 22 * LH) / 2));
+      // Legacy launcher: full colour on ST grey, in a circle, 48 dp.
+      const px = Math.round(48 * k);
+      const [c, ctx] = canvas(px);
+      ctx.fillStyle = '#2e2e2e';
+      ctx.beginPath();
+      ctx.arc(px / 2, px / 2, px / 2, 0, Math.PI * 2);
+      ctx.fill();
+      place(ctx, px, 48, 30, 9, (48 - 30 * LH) / 2);
+      ctx.fillStyle = RED;
+      ctx.fill(mark);
+      ctx.fillStyle = '#fff';
+      ctx.fill(letters);
+      emit(`mipmap-${d}/ic_launcher.png`, c);
+    }
+
+    // Check image (not shipped): the adaptive foreground at xxxhdpi on the icon background,
+    // with the 66 dp safe-zone circle and the 72 dp visible square drawn over it.
+    {
+      const px = 432, k = 4;
+      const [c, ctx] = canvas(px);
+      ctx.fillStyle = '#2e2e2e';
+      ctx.fillRect(0, 0, px, px);
+      place(ctx, px, 108, 60, 24, 25.98);
+      ctx.fillStyle = RED;
+      ctx.fill(mark);
+      ctx.fillStyle = '#fff';
+      ctx.fill(letters);
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.strokeStyle = '#0f0';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(px / 2, px / 2, 33 * k, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.strokeStyle = '#0ff';
+      ctx.strokeRect(18 * k, 18 * k, 72 * k, 72 * k);
+      emit('check/foreground-safe-zone.png', c);
+    }
+    document.body.dataset.result = 'PASS';
+  } catch (e) {
+    document.body.dataset.result = 'FAIL ' + e.message;
+  }
+})();
+</script>
