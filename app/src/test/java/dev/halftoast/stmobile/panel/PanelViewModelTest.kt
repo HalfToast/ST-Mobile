@@ -34,6 +34,8 @@ private const val ONLINE = "online=1\npid=9824\netime=01:34:17\nhttp_code=200\nl
 private const val FAIL = "FAIL"
 private const val WL_OFF = "mode=false\nentry=127.0.0.1\n"
 private const val WL_ON = "mode=true\nentry=127.0.0.1\n"
+/** Process alive but HTTP didn't answer (curl gave 000). */
+private const val NO_HTTP = "online=1\npid=9824\nhttp_code=000\nlatency_s=0\nbranch=staging\ncommit=ad29cbda6\nbehind=0\n"
 private const val OFFLINE = "online=0\nbranch=staging\ncommit=ad29cbda6\nbehind=0\n"
 
 /** Records every exec; answers dashboard/whitelist probes and stpanel subcommands with canned output. */
@@ -103,6 +105,7 @@ class PanelViewModelTest {
     private var updatedCalls = 0
     private var restartedCalls = 0
     private var dashboardCallsAtRestart = -1
+    private val downReasons = mutableListOf<String>()
 
     @Before fun setUp() {
         Dispatchers.setMain(StandardTestDispatcher())
@@ -111,7 +114,7 @@ class PanelViewModelTest {
         vm = PanelViewModel(shell, probes, onUpdated = { updatedCalls++ }, onServerRestarted = {
             restartedCalls++
             dashboardCallsAtRestart = shell.dashboardCalls
-        })
+        }, onServerDown = { downReasons += it })
     }
 
     @After fun tearDown() = Dispatchers.resetMain()
@@ -201,6 +204,7 @@ class PanelViewModelTest {
     }
 
     @Test fun stopAndBackupDontReloadChat() = runTest {
+        shell.dashboards = mutableListOf(OFFLINE)
         vm.request(PanelAction.Stop); vm.confirm(); advanceUntilIdle()
         vm.request(PanelAction.Backup); advanceUntilIdle()
         assertEquals(0, restartedCalls)
@@ -370,5 +374,71 @@ class PanelViewModelTest {
         advanceTimeBy(10_000)
         assertTrue(shell.dashboardCalls >= 3) // polling resumed
         vm.setVisible(false)
+    }
+
+    // --- Fix round 2 ---
+
+    @Test fun stopSuccessMarksServerDownOnce() = runTest {
+        shell.dashboards = mutableListOf(OFFLINE)
+        vm.request(PanelAction.Stop); vm.confirm(); advanceUntilIdle()
+        assertEquals(listOf("SillyTavern is stopped"), downReasons)
+        vm.refresh(); advanceUntilIdle()
+        assertEquals(1, downReasons.size)
+    }
+
+    @Test fun dashboardGoingDownNotifiesOnceNotEveryPoll() = runTest {
+        shell.dashboards = mutableListOf(ONLINE, OFFLINE)
+        vm.setVisible(true); advanceTimeBy(21_000); vm.setVisible(false)
+        assertTrue(shell.dashboardCalls >= 4)
+        assertEquals(listOf("SillyTavern is stopped"), downReasons)
+        assertEquals(0, restartedCalls)
+    }
+
+    @Test fun onlineButNotAnsweringNeedsTwoPollsInARow() = runTest {
+        shell.dashboards = mutableListOf(ONLINE, NO_HTTP, ONLINE, NO_HTTP, NO_HTTP)
+        repeat(3) { vm.refresh(); advanceUntilIdle() }
+        assertTrue(downReasons.isEmpty()) // a single slow answer is not "down"
+        repeat(2) { vm.refresh(); advanceUntilIdle() }
+        assertEquals(1, downReasons.size)
+    }
+
+    @Test fun serverBackAfterObservedStopReloadsChatOnce() = runTest {
+        // Started outside the app (e.g. stpanel over SSH): the next serving poll still recovers Chat.
+        shell.dashboards = mutableListOf(ONLINE, OFFLINE, OFFLINE, ONLINE)
+        vm.setVisible(true); advanceTimeBy(26_000); vm.setVisible(false)
+        assertEquals(1, downReasons.size)
+        assertEquals(1, restartedCalls)
+        assertEquals(4, dashboardCallsAtRestart)
+    }
+
+    @Test fun startAfterStopReloadsChatOnce() = runTest {
+        shell.dashboards = mutableListOf(OFFLINE)
+        vm.request(PanelAction.Stop); vm.confirm(); advanceUntilIdle()
+        shell.dashboards = mutableListOf(OFFLINE, ONLINE)
+        vm.request(PanelAction.Start); advanceUntilIdle()
+        assertEquals(1, downReasons.size)
+        assertEquals(1, restartedCalls)
+    }
+
+    @Test fun actionRequestedDuringPollRunsAfterIt() = runTest {
+        shell.delayMs = 3_000 // every exec, so the poll is in flight for 3 s
+        vm.setVisible(true); advanceTimeBy(1_000) // poll started, not finished
+        assertEquals(1, shell.dashboardCalls)
+        assertTrue(vm.ui.value.actionsEnabled) // buttons stay enabled during a poll
+        vm.request(PanelAction.Backup)
+        assertEquals(PanelAction.Backup, vm.ui.value.busy) // accepted, not ignored
+        advanceTimeBy(1_000)
+        assertTrue(shell.commands.none { it == "stpanel backup" }) // waits for the poll
+        advanceTimeBy(2_000)
+        assertEquals(listOf(DASHBOARD_CMD, "stpanel backup"), shell.commands.take(2))
+        vm.setVisible(false); advanceUntilIdle()
+        assertEquals(ActionResult.Ok("Backup created, 12M"), vm.ui.value.lastResult)
+    }
+
+    @Test fun lastActionStaysVisibleAfterSnackbar() = runTest {
+        vm.request(PanelAction.Backup); advanceUntilIdle()
+        vm.resultShown()
+        assertNull(vm.ui.value.lastResult)
+        assertEquals(ActionResult.Ok("Backup created, 12M"), vm.ui.value.lastAction)
     }
 }

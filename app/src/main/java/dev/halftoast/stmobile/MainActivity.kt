@@ -88,6 +88,7 @@ class MainActivity : ComponentActivity() {
                     probes = AndroidProbeSource(app, app.settings),
                     onUpdated = { currentHolder.get()?.revalidate() },
                     onServerRestarted = { currentHolder.get()?.reload() },
+                    onServerDown = { reason -> currentHolder.get()?.markServerDown(reason) },
                 )
             }
         }

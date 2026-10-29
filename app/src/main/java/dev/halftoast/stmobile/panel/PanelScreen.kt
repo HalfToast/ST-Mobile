@@ -1,5 +1,8 @@
 package dev.halftoast.stmobile.panel
 
+import android.util.Log
+import dev.halftoast.stmobile.BuildConfig
+import dev.halftoast.stmobile.StMobileApp
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,12 +28,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -63,7 +63,6 @@ fun PanelScreen(
 ) {
     val ui by vm.ui.collectAsState()
     var showWhitelist by rememberSaveable { mutableStateOf(false) }
-    val snackbar = remember { SnackbarHostState() }
 
     // Composed only while the Panel tab is shown; ON_STOP covers the app going to the background.
     LifecycleStartEffect(vm) {
@@ -71,17 +70,6 @@ fun PanelScreen(
         onStopOrDispose { vm.setVisible(false) }
     }
 
-    LaunchedEffect(ui.lastResult) {
-        val r = ui.lastResult ?: return@LaunchedEffect
-        // Consumed only after it was on screen, so a result that lands while another tab is shown isn't lost.
-        snackbar.showSnackbar(
-            when (r) {
-                is ActionResult.Ok -> r.message
-                is ActionResult.Failed -> r.message
-            },
-        )
-        vm.resultShown()
-    }
 
     Box(modifier.fillMaxSize()) {
         Column(
@@ -92,6 +80,9 @@ fun PanelScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             StatusHeader(ui.dashboard)
+            // Persistent instead of a snackbar: an overlay at the bottom sat on top of the action buttons
+            // and swallowed taps meant for them.
+            ui.lastAction?.let { LastActionLine(it) }
             ui.error?.let { ErrorCard(it, ui.hostKeyChanged, onRetry = vm::refresh, onOpenSettings = onOpenSettings) }
             if (ui.restartSuggested) {
                 RestartCard(enabled = ui.actionsEnabled, onRestart = { vm.request(PanelAction.Restart) }, onLater = vm::dismissRestartSuggestion)
@@ -126,7 +117,6 @@ fun PanelScreen(
             }
             ui.dashboard?.let { RecentLogCard(it.recentLogs, onOpenLogs) }
         }
-        SnackbarHost(snackbar, Modifier.align(Alignment.BottomCenter))
     }
 
     ui.pendingConfirm?.let { action ->
@@ -301,7 +291,10 @@ private fun androidx.compose.foundation.layout.RowScope.ActionButton(
 ) {
     val destructive = action == PanelAction.Stop
     FilledTonalButton(
-        onClick = { onClick(action) },
+        onClick = {
+            if (BuildConfig.DEBUG) Log.i(StMobileApp.LOG_TAG, "panel tap $action enabled=${ui.actionsEnabled} busy=${ui.busy}")
+            onClick(action)
+        },
         enabled = enabled && ui.actionsEnabled,
         modifier = Modifier.weight(1f),
         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 8.dp),
@@ -315,6 +308,23 @@ private fun androidx.compose.foundation.layout.RowScope.ActionButton(
         if (ui.busy == action) BusySpinner() else Text(action.label, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
+
+@Composable
+private fun LastActionLine(r: ActionResult) {
+    Text(
+        "Last action: ${r.text}",
+        style = MaterialTheme.typography.bodyMedium,
+        maxLines = 2,
+        overflow = TextOverflow.Ellipsis,
+        color = if (r is ActionResult.Failed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+    )
+}
+
+private val ActionResult.text: String
+    get() = when (this) {
+        is ActionResult.Ok -> message
+        is ActionResult.Failed -> message
+    }
 
 @Composable
 private fun BusySpinner() = CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)

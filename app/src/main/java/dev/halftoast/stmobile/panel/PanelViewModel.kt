@@ -62,6 +62,7 @@ data class PanelUi(
     /** Outcome of the last whitelist change, shown inside the dialog. */
     val whitelistMessage: String? = null,
     val pendingWhitelistToggle: WhitelistToggle? = null,
+    val lastAction: ActionResult? = null,
 ) {
     val actionsEnabled: Boolean get() = busy == null && !whitelistBusy
 
@@ -102,14 +103,19 @@ internal fun isCoveredBy(ip: String, entries: List<String>): Boolean = entries.a
  * and the dashboard probe's background `git fetch` could race `git pull`.
  *
  * @param onUpdated called after an Update that changed the code; wired to WebViewHolder.revalidate().
- * @param onServerRestarted called once after a Start/Restart, when a fresh dashboard shows the server
- *   serving again; wired to WebViewHolder.reload() so the Chat tab recovers.
+ * @param onServerRestarted called once when a fresh dashboard shows the server serving again after a
+ *   Start/Restart or after the server was seen down (also if it was started outside the app); wired to
+ *   WebViewHolder.reload() so the Chat tab recovers.
+ * @param onServerDown called once when the server is seen down (a successful Stop, a dashboard with
+ *   online=0, or two dashboards in a row where HTTP didn't answer); wired to
+ *   WebViewHolder.markServerDown() so Chat shows the Unreachable screen instead of a stale page.
  */
 class PanelViewModel(
     private val shell: RemoteShell,
     private val probes: ProbeSource,
     private val onUpdated: () -> Unit,
     private val onServerRestarted: () -> Unit = {},
+    private val onServerDown: (String) -> Unit = {},
 ) : ViewModel() {
     private val _ui = MutableStateFlow(PanelUi())
     val ui: StateFlow<PanelUi> = _ui
@@ -122,6 +128,13 @@ class PanelViewModel(
     private var awaitServingJob: Job? = null
     /** Probes left in the current Start/Restart wait; > 0 means a wait is pending (maybe paused). */
     private var servingTriesLeft = 0
+
+    /** A Start/Restart succeeded; reload Chat when a fresh dashboard shows the server serving. */
+    private var reloadPending = false
+    /** [onServerDown] was called and the server hasn't been seen serving since. */
+    private var downNotified = false
+    /** Consecutive fresh dashboards with a live process whose HTTP didn't answer. */
+    private var notAnswering = 0
 
     /** Polls the dashboard every [POLL_MS] while true. The screen sets it from tab visibility and lifecycle. */
     fun setVisible(visible: Boolean) {
@@ -285,6 +298,7 @@ class PanelViewModel(
         _ui.update {
             it.copy(
                 lastResult = result,
+                lastAction = result,
                 whitelistMessage = text,
                 restartSuggested = it.restartSuggested || result is ActionResult.Ok,
             )
@@ -295,7 +309,6 @@ class PanelViewModel(
         _ui.update { it.copy(busy = action) }
         viewModelScope.launch {
             var result: ActionResult = ActionResult.Failed("${action.label} failed")
-            var fresh: DashboardState? = null
             try {
                 probeLock.withLock { } // don't start under an in-flight probe
                 val stdin = if (action == PanelAction.CleanCache) "y\n" else null
@@ -309,16 +322,14 @@ class PanelViewModel(
                     showError(e)
                     ActionResult.Failed("${action.label} failed: ${describe(e)}")
                 }
-                _ui.update { it.copy(lastResult = result) }
+                _ui.update { it.copy(lastResult = result, lastAction = result) }
                 if (result is ActionResult.Ok) afterSuccess(action, result)
                 // Still busy here, so no poll can interleave; polling resumes after this.
-                fresh = refreshNow(force = true)
+                refreshNow(force = true)
             } finally {
                 _ui.update { it.copy(busy = null) }
             }
-            if (result is ActionResult.Ok && (action == PanelAction.Start || action == PanelAction.Restart)) {
-                if (fresh?.serving == true) onServerRestarted() else startAwaitServing()
-            }
+            if (reloadPending) startAwaitServing()
         }
     }
 
@@ -346,7 +357,11 @@ class PanelViewModel(
                 onUpdated()
                 _ui.update { it.copy(restartSuggested = true) }
             }
-            PanelAction.Start, PanelAction.Restart -> _ui.update { it.copy(restartSuggested = false) }
+            PanelAction.Start, PanelAction.Restart -> {
+                _ui.update { it.copy(restartSuggested = false) }
+                reloadPending = true
+            }
+            PanelAction.Stop -> markDown(STOPPED)
             else -> Unit
         }
     }
@@ -362,16 +377,40 @@ class PanelViewModel(
     private fun launchAwaitServing() {
         if (awaitServingJob?.isActive == true) return
         awaitServingJob = viewModelScope.launch {
-            while (servingTriesLeft > 0) {
+            // Only fresh, successful probes count (see observe); a failed one never uses the old state.
+            while (servingTriesLeft > 0 && reloadPending) {
                 delay(AWAIT_SERVING_INTERVAL_MS)
                 servingTriesLeft--
-                // Only a fresh, successful probe counts; a failed one never falls back to the old state.
-                if (refreshNow()?.serving == true) {
+                refreshNow()
+            }
+        }
+    }
+
+    /** Chat follows the server: down once when it stops answering, one reload when it serves again. */
+    private fun observe(d: DashboardState) {
+        when {
+            d.serving -> {
+                notAnswering = 0
+                if (reloadPending || downNotified) {
+                    reloadPending = false
+                    downNotified = false
                     servingTriesLeft = 0
                     onServerRestarted()
                 }
             }
+            !d.online -> {
+                notAnswering = 0
+                markDown(STOPPED)
+            }
+            // Live process, no HTTP answer: could be one slow reply, so wait for a second in a row.
+            ++notAnswering >= 2 -> markDown("SillyTavern is not responding")
         }
+    }
+
+    private fun markDown(reason: String) {
+        if (downNotified) return
+        downNotified = true
+        onServerDown(reason)
     }
 
     /**
@@ -392,6 +431,7 @@ class PanelViewModel(
                 } else {
                     val d = parseDashboard(r.stdout)
                     _ui.update { it.copy(dashboard = d, error = null, hostKeyChanged = false) }
+                    observe(d)
                     d
                 }
             } catch (e: CancellationException) {
@@ -461,6 +501,7 @@ class PanelViewModel(
         const val AWAIT_SERVING_TRIES = 45
         const val AWAIT_SERVING_INTERVAL_MS = 2_000L
         private const val UP_TO_DATE = "Already up to date"
+        private const val STOPPED = "SillyTavern is stopped"
         val NEEDS_CONFIRM = setOf(PanelAction.Stop, PanelAction.CleanCache, PanelAction.Update)
     }
 }

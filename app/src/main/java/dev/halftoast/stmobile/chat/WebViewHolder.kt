@@ -121,6 +121,17 @@ class WebViewHolder(private val activity: ComponentActivity, private val appSett
         webView.loadUrlTimed()
     }
 
+    /**
+     * The Control Center saw the server stop: show Unreachable now instead of the stale page. Loads
+     * nothing (a pending load and readiness polling are dropped); Retry or [reload] loads again.
+     */
+    fun markServerDown(reason: String) {
+        navToken++
+        loadGeneration++
+        webView.stopLoading()
+        _state.value = ChatState.Unreachable(reason)
+    }
+
     /** Builds a fresh WebView after the renderer died. Does not reload; call [reload]. */
     fun recreate() {
         (webView.parent as? ViewGroup)?.removeView(webView)
