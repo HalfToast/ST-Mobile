@@ -1,0 +1,78 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>select-sheet open benchmark</title>
+<!--
+  Not part of CI. Times how long a long native select takes to open as a sheet:
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless=new --disable-gpu \
+      --allow-file-access-from-files --dump-dom "file://$PWD/tools/bench-select-sheet.html" | grep -o 'data-bench="{[^"]*' | tail -1
+  Query parameters: n (options, default 1000), runs (default 40), src (script, default the app's),
+  rules (extra generic CSS rules, default 0, a rough stand-in for SillyTavern's large stylesheet).
+  "open" is the open() call alone; "open+layout" also flushes style and layout of what it rendered.
+  Medians and p90 skip the first (cold) run.
+-->
+</head>
+<body>
+<label for="models">Models</label>
+<select id="models"></select>
+<pre id="out"></pre>
+<script>
+(function () {
+  var params = new URLSearchParams(location.search);
+  var n = +(params.get('n') || 1000), runs = +(params.get('runs') || 40);
+  var src = params.get('src') || '../app/src/main/assets/web/select-sheet.js';
+  var rules = +(params.get('rules') || 0), css = [];
+  for (var k = 0; k < rules; k++) {
+    css.push('div.c' + k + ' > span, body div:not(.n' + k + ') [data-k="' + k + '"] { color: rgb(' + (k % 255) + ',1,1); }');
+  }
+  if (rules) {
+    var style = document.createElement('style');
+    style.textContent = css.join('\n');
+    document.head.appendChild(style);
+  }
+  var select = document.getElementById('models');
+  for (var i = 0; i < n; i++) {
+    var o = document.createElement('option');
+    o.value = 'provider-' + (i % 37) + '/model-' + i;
+    o.textContent = 'Provider ' + (i % 37) + ' / some model name ' + i;
+    select.appendChild(o);
+  }
+  select.selectedIndex = Math.floor(n * 0.7);
+
+  function stats(xs) {
+    var warm = xs.slice(1).sort(function (a, b) { return a - b; });
+    function at(p) { return warm[Math.min(warm.length - 1, Math.floor(p * warm.length))]; }
+    return { cold: +xs[0].toFixed(2), median: +at(0.5).toFixed(2), p90: +at(0.9).toFixed(2) };
+  }
+
+  var script = document.createElement('script');
+  script.src = src;
+  script.onload = function () {
+    var open = [], openLayout = [], rows = 0;
+    for (var r = 0; r < runs; r++) {
+      var t0 = performance.now();
+      var ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+      select.dispatchEvent(ev);
+      var t1 = performance.now();
+      var list = document.querySelector('#stm-select-sheet .stm-list');
+      void list.scrollHeight; void document.body.getBoundingClientRect();
+      var t2 = performance.now();
+      if (!ev.defaultPrevented) throw new Error('sheet did not open');
+      rows = document.querySelectorAll('#stm-select-sheet .stm-row').length;
+      window.__stmSelectSheet.close();
+      void document.body.offsetHeight;
+      open.push(t1 - t0);
+      openLayout.push(t2 - t0);
+    }
+    var result = { options: n, rules: rules, runs: runs, rowElements: rows, open: stats(open), openLayout: stats(openLayout) };
+    document.getElementById('out').textContent = JSON.stringify(result, null, 2);
+    document.body.dataset.bench = JSON.stringify(result);
+    document.body.dataset.result = 'PASS';
+  };
+  document.head.appendChild(script);
+})();
+</script>
+</body>
+</html>

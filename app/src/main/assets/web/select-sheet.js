@@ -8,6 +8,10 @@
  *   (`dialog[open]:not([closing])`, used for toasts and the streaming display) skip it.
  * - ST sees what a native pick gives it: the same selectedIndex / option.selected and one input then
  *   one change event, and nothing at all when the value did not change.
+ * - Long lists (hundreds of models) stay fast: the options are read once into a plain array, and only
+ *   the rows in and near view exist as elements, absolutely placed in a spacer and recycled while
+ *   scrolling. Every row has the same measured height (one line, ellipsised), so positions and the
+ *   scroll to the current row are arithmetic. Search runs over the array.
  * - Any failure while opening returns false, and the native list opens as before.
  * - Tells the app when it opens and closes (STMobileSheet web message listener, "open" / "closed"),
  *   so the app's floating button can step out of the way. "closed" only ever follows an "open".
@@ -21,6 +25,8 @@
   var CSS_ID = 'stm-select-sheet-css';
   var SEARCH_ABOVE = 8;
   var SWIPE_CLOSE_PX = 80;
+  // Rows rendered beyond each edge of the visible part of the list, in px.
+  var BUFFER_PX = 400;
   // The tap that opened the sheet must not also hit it. A click only counts after a pointerdown
   // inside the sheet, or once this long has passed (clicks without pointer events, e.g. TalkBack).
   var CLICK_GUARD_MS = 500;
@@ -46,8 +52,6 @@
     S + '.stm-dim{position:absolute;inset:0;background:rgba(0,0,0,0.55);}',
     S + '.stm-panel{position:absolute;left:0;right:0;bottom:0;box-sizing:border-box;display:flex;' +
       'flex-direction:column;max-height:75vh;max-height:75dvh;background:' + BG + ';' +
-      'backdrop-filter:blur(var(--SmartThemeBlurStrength, 10px));' +
-      '-webkit-backdrop-filter:blur(var(--SmartThemeBlurStrength, 10px));' +
       'border-top:1px solid ' + BORDER + ';border-radius:18px 18px 0 0;overflow:hidden;' +
       'padding:8px 0 max(8px, env(safe-area-inset-bottom));transition:transform .15s ease-out;}',
     S + '.stm-head{flex:none;touch-action:none;outline:none;}',
@@ -58,14 +62,18 @@
       'color:' + TEXT + ';font:inherit;font-size:.93em;outline:none;-webkit-appearance:none;appearance:none;}',
     S + '.stm-search::placeholder{color:' + MUTED + ';}',
     S + '.stm-list{position:relative;flex:0 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;}',
-    S + '.stm-row{display:flex;justify-content:space-between;align-items:center;padding:11px 16px;' +
-      'line-height:1.3;cursor:pointer;user-select:none;-webkit-user-select:none;' +
-      '-webkit-tap-highlight-color:transparent;overflow-wrap:anywhere;}',
+    S + '.stm-spacer{position:relative;}',
+    // Rows, headers and dividers are absolutely placed in the spacer, one line each (fixed heights).
+    S + '.stm-row,' + S + '.stm-group,' + S + '.stm-divider{position:absolute;left:0;right:0;top:0;' +
+      'box-sizing:border-box;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}',
+    S + '.stm-row{padding:11px 16px;line-height:1.3;cursor:pointer;user-select:none;-webkit-user-select:none;' +
+      '-webkit-tap-highlight-color:transparent;}',
     S + '.stm-row:active:not(.stm-disabled){background:rgba(255,255,255,0.04);}',
     S + '.stm-row.stm-selected{color:' + ACCENT + ';background:' + TINT_FALLBACK + ';box-shadow:inset 3px 0 0 ' + ACCENT + ';}',
-    S + '.stm-row.stm-selected::after{content:"\\2713";color:' + ACCENT + ';margin-left:12px;flex:none;}',
+    S + '.stm-row.stm-selected{padding-right:40px;}',
+    S + '.stm-row.stm-selected::after{content:"\\2713";color:' + ACCENT + ';position:absolute;right:16px;top:11px;}',
     S + '.stm-row.stm-disabled{opacity:.4;cursor:default;}',
-    S + '.stm-divider{height:1px;background:' + BORDER + ';margin:4px 16px;}',
+    S + '.stm-divider{height:9px;padding:4px 16px;background:' + BORDER + ' content-box;}',
     S + '.stm-group{padding:10px 16px 4px;font-size:.8em;font-weight:600;color:' + MUTED + ';}',
     S + '.stm-empty{padding:16px;text-align:center;color:' + MUTED + ';}',
     S + '.stm-foot{flex:none;display:flex;justify-content:flex-end;padding:8px 14px 0;border-top:1px solid ' + BORDER + ';}',
@@ -91,12 +99,17 @@
     '<div class="stm-panel">' +
       '<div class="stm-head" tabindex="-1" autofocus><div class="stm-handle"></div><div class="stm-title"></div></div>' +
       '<input class="stm-search" type="search" placeholder="Search" autocomplete="off" spellcheck="false" enterkeyhint="search">' +
-      '<div class="stm-list" role="listbox"></div>' +
+      '<div class="stm-list" role="listbox"><div class="stm-spacer"></div></div>' +
       '<div class="stm-empty" hidden>No matches</div>' +
       '<div class="stm-foot"><button type="button" class="stm-done">Done</button></div>' +
     '</div>';
 
-  var root = null, panel, head, titleEl, search, list, empty, foot;
+  var root = null, panel, head, titleEl, search, list, spacer, empty, foot;
+  // The open list: every shown option once, then what the list shows now (search applied).
+  var items = [];       // {index, label, lower, disabled, selected, groupBreak, groupLabel}
+  var entries = [];     // {kind: 'row' | 'group' | 'divider', item, top}
+  var heights = null;   // measured px height of each entry kind
+  var rendered = {};    // entry number -> its element, for the entries in and near view
   var current = null;   // the open <select>
   var observer = null;
   var picked = null;    // multiple: per-option selected state while open
@@ -123,6 +136,7 @@
     titleEl = dlg.querySelector('.stm-title');
     search = dlg.querySelector('.stm-search');
     list = dlg.querySelector('.stm-list');
+    spacer = dlg.querySelector('.stm-spacer');
     empty = dlg.querySelector('.stm-empty');
     foot = dlg.querySelector('.stm-foot');
 
@@ -137,6 +151,8 @@
     dlg.addEventListener('click', onClick);
     dlg.addEventListener('cancel', function (e) { e.preventDefault(); close(); });
     search.addEventListener('input', filter);
+    list.addEventListener('scroll', function () { if (current) render(); }, { passive: true });
+    window.addEventListener('resize', function () { if (current) render(); });
     head.addEventListener('touchstart', onDragStart, { passive: true });
     head.addEventListener('touchmove', onDragMove, { passive: true });
     head.addEventListener('touchend', function () { endDrag(true); });
@@ -148,12 +164,8 @@
 
   function titleFor(select) {
     var t = '';
-    if (select.id) {
-      var labels = document.querySelectorAll('label[for]');
-      for (var i = 0; i < labels.length && !t; i++) {
-        if (labels[i].htmlFor === select.id) t = cleanText(labels[i].textContent);
-      }
-    }
+    var labels = select.labels || [];
+    for (var i = 0; i < labels.length && !t; i++) t = cleanText(labels[i].textContent);
     if (!t) t = cleanText(select.getAttribute('aria-label'));
     if (!t) t = cleanText(select.getAttribute('title'));
     for (var el = select.previousElementSibling; el && !t; el = el.previousElementSibling) {
@@ -162,64 +174,146 @@
     return t;
   }
 
-  function isHidden(opt) {
-    if (opt.hidden) return true;
-    var g = opt.parentNode;
-    if (g && g.tagName === 'OPTGROUP' && g.hidden) return true;
-    return getComputedStyle(opt).display === 'none';
+  // Hidden the ways ST hides options; no getComputedStyle (it is per option and very slow on ST).
+  function isHidden(el) {
+    return el.hidden || el.style.display === 'none' || el.classList.contains('displayNone');
   }
 
-  function buildRows(select) {
-    list.textContent = '';
-    var opts = select.options, lastParent = null, rows = 0;
+  /** Reads the shown options into [items] once. Plain property reads only: no style or layout. */
+  function readItems(select) {
+    var opts = select.options, out = [], lastParent = null;
     for (var i = 0; i < opts.length; i++) {
-      var opt = opts[i];
-      if (isHidden(opt)) continue;
-      var parent = opt.parentNode;
+      var opt = opts[i], parent = opt.parentNode;
+      var group = parent && parent.tagName === 'OPTGROUP' ? parent : null;
+      if (isHidden(opt) || (group && isHidden(group))) continue;
+      var label = opt.label;
+      var item = {
+        index: i, label: label, lower: label.toLowerCase(),
+        disabled: opt.disabled || !!(group && group.disabled), selected: opt.selected,
+        groupBreak: false, groupLabel: '',
+      };
       if (parent !== lastParent) {
-        var label = parent.tagName === 'OPTGROUP' ? cleanText(parent.label) : '';
-        if (label) {
-          var g = document.createElement('div');
-          g.className = 'stm-group';
-          g.textContent = label;
-          list.appendChild(g);
-        } else if (rows > 0) {
-          var d = document.createElement('div');
-          d.className = 'stm-divider';
-          list.appendChild(d);
-        }
+        var gl = group ? cleanText(group.label) : '';
+        if (gl) item.groupLabel = gl;
+        else if (out.length > 0) item.groupBreak = true;
         lastParent = parent;
       }
-      var row = document.createElement('div');
-      row.className = 'stm-row';
-      row.setAttribute('role', 'option');
-      row.setAttribute('data-index', String(opt.index));
-      row.textContent = opt.label;
-      if (opt.selected) row.classList.add('stm-selected');
-      if (opt.matches(':disabled')) {
-        row.classList.add('stm-disabled');
-        row.setAttribute('aria-disabled', 'true');
-      }
-      row.setAttribute('aria-selected', opt.selected ? 'true' : 'false');
-      list.appendChild(row);
-      rows++;
+      out.push(item);
     }
-    return rows;
+    return out;
+  }
+
+  /** One element of each kind, measured once per open (font and padding follow ST's theme). */
+  function measure() {
+    var probes = { row: makeEl('row'), group: makeEl('group'), divider: makeEl('divider') };
+    probes.row.textContent = 'Xg';
+    probes.group.textContent = 'Xg';
+    var h = {};
+    for (var k in probes) spacer.appendChild(probes[k]);
+    for (var k2 in probes) h[k2] = probes[k2].getBoundingClientRect().height || 1;
+    for (var k3 in probes) spacer.removeChild(probes[k3]);
+    return h;
+  }
+
+  /** Lays out what the list shows for search [q] (lower case; '' for all) and sizes the spacer. */
+  function buildEntries(q) {
+    entries = [];
+    var top = 0;
+    for (var i = 0; i < items.length; i++) {
+      var it = items[i];
+      if (q) {
+        if (it.lower.indexOf(q) < 0) continue;
+      } else if (it.groupLabel) {
+        entries.push({ kind: 'group', item: it, top: top });
+        top += heights.group;
+      } else if (it.groupBreak) {
+        entries.push({ kind: 'divider', item: it, top: top });
+        top += heights.divider;
+      }
+      entries.push({ kind: 'row', item: it, top: top });
+      top += heights.row;
+    }
+    spacer.style.height = top + 'px';
+    clearRendered();
+  }
+
+  function makeEl(kind) {
+    var el = document.createElement('div');
+    el.className = 'stm-' + kind;
+    if (kind === 'row') el.setAttribute('role', 'option');
+    return el;
+  }
+
+  function clearRendered() {
+    spacer.textContent = '';
+    rendered = {};
+  }
+
+  function isPicked(it) { return picked ? !!picked[it.index] : it.selected; }
+
+  function paintRow(el, it) {
+    var on = isPicked(it);
+    el.className = 'stm-row' + (on ? ' stm-selected' : '') + (it.disabled ? ' stm-disabled' : '');
+    el.setAttribute('aria-selected', on ? 'true' : 'false');
+    if (it.disabled) el.setAttribute('aria-disabled', 'true'); else el.removeAttribute('aria-disabled');
+  }
+
+  function fill(el, e) {
+    el.style.top = e.top + 'px';
+    if (e.kind === 'divider') return;
+    if (el.__stmItem !== e.item) {
+      el.__stmItem = e.item;
+      // A blank label still needs its line, or the row would be shorter than its slot.
+      el.textContent = (e.kind === 'group' ? e.item.groupLabel : e.item.label) || '\u00a0';
+      if (e.kind === 'row') el.setAttribute('data-index', String(e.item.index));
+    }
+    if (e.kind === 'row') paintRow(el, e.item);
+  }
+
+  /** First entry whose bottom is below [y]. */
+  function firstBelow(y) {
+    var lo = 0, hi = entries.length;
+    while (lo < hi) {
+      var mid = (lo + hi) >> 1, e = entries[mid];
+      if (e.top + heights[e.kind] <= y) lo = mid + 1; else hi = mid;
+    }
+    return lo;
+  }
+
+  /** Makes the entries in and near view exist (reusing elements that scrolled away), and no others. */
+  function render() {
+    var top = list.scrollTop, bottom = top + list.clientHeight + BUFFER_PX;
+    var first = firstBelow(top - BUFFER_PX), last = first;
+    while (last < entries.length && entries[last].top < bottom) last++;
+    var spare = { row: [], group: [], divider: [] };
+    for (var key in rendered) {
+      var n = +key;
+      if (n < first || n >= last) {
+        spare[entries[n].kind].push(rendered[key]);
+        delete rendered[key];
+      }
+    }
+    for (var i = first; i < last; i++) {
+      if (rendered[i]) continue;
+      var e = entries[i], el = spare[e.kind].pop();
+      if (!el) {
+        el = makeEl(e.kind);
+        spacer.appendChild(el);
+      }
+      fill(el, e);
+      rendered[i] = el;
+    }
+    for (var kind in spare) {
+      for (var j = 0; j < spare[kind].length; j++) spacer.removeChild(spare[kind][j]);
+    }
   }
 
   function filter() {
     var q = search.value.trim().toLowerCase();
-    var kids = list.children, shown = 0;
-    for (var i = 0; i < kids.length; i++) {
-      var el = kids[i];
-      if (el.classList.contains('stm-row')) {
-        el.hidden = !!q && el.textContent.toLowerCase().indexOf(q) < 0;
-        if (!el.hidden) shown++;
-      } else {
-        el.hidden = !!q;
-      }
-    }
-    empty.hidden = !q || shown > 0;
+    buildEntries(q);
+    list.scrollTop = 0;
+    empty.hidden = !q || entries.length > 0;
+    render();
   }
 
   function open(select) {
@@ -228,13 +322,13 @@
       if (!select || select.tagName !== 'SELECT' || select.disabled) return false;
       injectCss();
       ensureRoot();
-      var rows = buildRows(select);
-      if (rows === 0) return false;
+      items = readItems(select);
+      if (items.length === 0) return false;
       var title = titleFor(select);
       titleEl.textContent = title;
       titleEl.hidden = !title;
       search.value = '';
-      search.hidden = rows <= SEARCH_ABOVE;
+      search.hidden = items.length <= SEARCH_ABOVE;
       empty.hidden = true;
       foot.hidden = !select.multiple;
       panel.style.transform = '';
@@ -246,18 +340,30 @@
         for (var i = 0; i < select.options.length; i++) picked.push(select.options[i].selected);
       }
       current = select;
-      observer = new MutationObserver(function () { close(); });
-      observer.observe(select, { childList: true, subtree: true, attributes: true });
       armed = false;
       openedAt = Date.now();
       // Like a native pick, focus ends up on the select (the dialog restores it on close).
       select.focus({ preventScroll: true });
+      // Only after focus: a focus handler that touches the select must not close the sheet at once.
+      observer = new MutationObserver(function () { close(); });
+      observer.observe(select, { childList: true, subtree: true, attributes: true });
       root.classList.add('stm-open');
       root.showModal();
+      clearRendered();
+      heights = measure();
+      buildEntries('');
+      list.scrollTop = 0;
+      for (var k = 0; k < entries.length; k++) {
+        var e = entries[k];
+        if (e.kind === 'row' && isPicked(e.item)) {
+          list.scrollTop = e.top - (list.clientHeight - heights.row) / 2;
+          break;
+        }
+      }
+      render();
+      // Last, once nothing can fail any more: a failed open tells the app nothing.
       announced = true;
       tellApp('open');
-      var sel = list.querySelector('.stm-selected');
-      if (sel) list.scrollTop = sel.offsetTop - (list.clientHeight - sel.offsetHeight) / 2;
       return true;
     } catch (e) {
       abort();
@@ -283,6 +389,8 @@
     observer = null;
     current = null;
     picked = null;
+    items = [];
+    entries = [];
     dragStart = null;
     if (!root) return;
     root.classList.remove('stm-open');
@@ -308,8 +416,7 @@
     var select = current;
     if (select.multiple) {
       picked[index] = !picked[index];
-      row.classList.toggle('stm-selected', picked[index]);
-      row.setAttribute('aria-selected', picked[index] ? 'true' : 'false');
+      if (row.__stmItem) paintRow(row, row.__stmItem);
       return;
     }
     close();

@@ -47,6 +47,17 @@
       <optgroup label="Veg"><option value="leek" disabled>Leek</option><option value="kale">Kale</option></optgroup>
     </select>
   </div>
+  <div>
+    <select id="hiding" aria-label="Hiding">
+      <option value="a">A</option>
+      <option value="b" hidden>B</option>
+      <option value="c" style="display: none">C</option>
+      <option value="d" class="displayNone">D</option>
+      <optgroup label="Gone" class="displayNone"><option value="g">G</option></optgroup>
+      <optgroup label="Locked" disabled><option value="e">E</option></optgroup>
+    </select>
+  </div>
+  <div id="big_box"><label for="big">Big list</label></div>
   <select id="size_four" size="4"><option>1</option><option>2</option><option>3</option><option>4</option></select>
   <select id="disabled_select" disabled><option>x</option></select>
 </div>
@@ -59,6 +70,17 @@
   var sizeFour = document.getElementById('size_four');
   var disabled = document.getElementById('disabled_select');
   var fixtures = document.getElementById('fixtures');
+  var hiding = document.getElementById('hiding');
+  // HalfToast's NanoGPT model list is a native select with hundreds of options.
+  var big = document.createElement('select');
+  big.id = 'big';
+  for (var n = 0; n < 1000; n++) {
+    var opt = document.createElement('option');
+    opt.value = 'v' + n;
+    opt.textContent = 'opt ' + n;
+    big.appendChild(opt);
+  }
+  document.getElementById('big_box').appendChild(big);
 
   var events = [];
   // The app's STMobileSheet web message listener, stubbed: records what the page posts.
@@ -252,10 +274,80 @@
       eq(named.value, 'apple', 'value');
       eq(events, [], 'events');
     },
+    longListRendersOnlyAWindow: function () {
+      big.selectedIndex = 700;
+      down(big);
+      ok(sheet(), 'open');
+      eq(q('.stm-title').textContent.trim(), 'Big list', 'title from select.labels');
+      var rows = document.querySelectorAll('#stm-select-sheet .stm-row');
+      ok(rows.length > 0 && rows.length <= 80, 'at most 80 row elements, got ' + rows.length);
+      var cur = q('.stm-row[data-index="700"]');
+      ok(cur, 'current row rendered');
+      ok(cur.classList.contains('stm-selected'), 'current row marked');
+      var lr = q('.stm-list').getBoundingClientRect(), cr = cur.getBoundingClientRect();
+      ok(cr.top >= lr.top - 1 && cr.bottom <= lr.bottom + 1, 'current row in view');
+      ok(Math.abs((cr.top + cr.bottom) / 2 - (lr.top + lr.bottom) / 2) < cr.height, 'current row centred');
+    },
+    longListSearchAndPickFarDown: function () {
+      big.selectedIndex = 0;
+      down(big);
+      var search = q('.stm-search');
+      search.value = 'opt 9';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      ok(q('.stm-empty').hidden, 'matches');
+      var texts = visibleRows().map(function (r) { return r.textContent.trim(); });
+      eq(texts.slice(0, 3), ['opt 9', 'opt 90', 'opt 91'], 'first matches');
+      ok(texts.every(function (t) { return t.indexOf('opt 9') === 0; }), 'only matches rendered');
+      ok(texts.length <= 80, 'windowed while searching');
+      var list = q('.stm-list');
+      list.scrollTop = list.scrollHeight;
+      list.dispatchEvent(new Event('scroll'));
+      var last = rowByText('opt 999');
+      ok(last, 'last match rendered after scrolling down');
+      tap(last);
+      eq(big.value, 'v999', 'value');
+      eq(big.selectedIndex, 999, 'selectedIndex');
+      eq(events, ['input', 'change'], 'events');
+      ok(!sheet(), 'closed');
+    },
+    longListScrollRecyclesRows: function () {
+      big.selectedIndex = 0;
+      down(big);
+      var list = q('.stm-list');
+      for (var y = 0; y <= list.scrollHeight; y += 900) {
+        list.scrollTop = y;
+        list.dispatchEvent(new Event('scroll'));
+        ok(document.querySelectorAll('#stm-select-sheet .stm-row').length <= 80, 'window at ' + y);
+      }
+      ok(rowByText('opt 999'), 'reached the end');
+      ok(!rowByText('opt 0'), 'top rows recycled');
+    },
+    hiddenOptionsAndDisabledGroups: function () {
+      hiding.value = 'a';
+      down(hiding);
+      eq(visibleRows().map(function (r) { return r.textContent.trim(); }), ['A', 'E'], 'shown rows');
+      eq(q('.stm-row[data-index="5"]').classList.contains('stm-disabled'), true, 'disabled by its optgroup');
+      tap(rowByText('E'));
+      ok(sheet(), 'still open');
+      eq(hiding.value, 'a', 'value');
+    },
     listBoxAndDisabledAreNotIntercepted: function () {
       eq(down(sizeFour), false, 'size=4');
       eq(down(disabled), false, 'disabled');
       ok(!sheet(), 'no sheet');
+    },
+    focusHandlerTouchingTheSelectKeepsItOpen: function () {
+      function onFocus() { yesNo.classList.toggle('focused'); }
+      yesNo.addEventListener('focus', onFocus);
+      try {
+        yesNo.blur();
+        down(yesNo);
+        return wait(50).then(function () {
+          ok(sheet(), 'still open after the focus handler changed a class');
+        });
+      } finally {
+        yesNo.removeEventListener('focus', onFocus);
+      }
     },
     optionsMutateWhileOpenClosesWithoutChange: function () {
       source.value = 'chutes';
