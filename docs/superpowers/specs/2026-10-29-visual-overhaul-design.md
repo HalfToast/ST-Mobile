@@ -17,13 +17,13 @@ HalfToast's current ST theme is **Glimmer — by Rivelle**: background `rgb(24,2
 1. **Chat gets the whole screen.** The bottom tab bar is gone.
 2. **One look across the app**, taken from HalfToast's live ST theme.
 3. **ST's selection lists open as a themed bottom sheet** instead of Android's dialog.
-4. Fix the light strip that shows under the chat while the keyboard slides up (deferred from the keyboard-lag fix, `eff20e1`, to this overhaul by HalfToast).
+4. **The app gets SillyTavern's icon, a proper notification and a short splash animation** (added by HalfToast after the first draft).
+5. Fix the light strip that shows under the chat while the keyboard slides up (deferred from the keyboard-lag fix, `eff20e1`, to this overhaul by HalfToast).
 
 ## Non-goals
 
 - Changing anything on the tablet (ST, its theme, extensions, config, `stpanel`). Everything here happens on the phone.
 - Restyling ST's own page beyond the selection lists. The chat itself looks exactly as in Chrome. The earlier spec said nothing may be injected into the page that changes its look; the selection lists (goal 3) are the one narrow exception HalfToast asked for.
-- A new app icon or launcher name *(builder's call: out of scope; can be a later small change)*.
 - A light theme or a theme picker inside the app. The app follows ST.
 
 ## Anti-goals (fails even if it technically works)
@@ -71,6 +71,12 @@ Each was shown as a mockup (kept in `.superpowers/brainstorm/83211-1793264355/co
 - **Logs:** the Server/Access switch becomes ST-style buttons. Text is mono, with warnings and errors tinted.
 - **Everything else** gets the same look: confirm dialogs, the whitelist manager, Settings, Setup, and the Chat overlays (Reconnecting pill, progress bar, Still-loading bar, Unreachable screen). Dialogs look like ST's own popups. The phone's status bar and gesture-bar area are dark, matching.
 
+### 4. Icon, notification and splash (mockup `icon-splash.html`, splash option B)
+
+- **App icon:** "just the sillytavern icon" (HalfToast). ST's own logo (red circuit brain `#a11b1b` with white "ST") on ST's dark grey, as in ST's `public/img/apple-icon-512x512.png`, as an adaptive icon. It includes a monochrome layer for Android's themed icons, where the "ST" letters are cut out of the brain. The source vector is ST's `public/img/logo.svg` (two paths: `path9` red mark, `path2` white letters). Copy it into the app; nothing on the tablet changes. The launcher name stays "ST Mobile" *(builder's call: HalfToast didn't object when asked)*.
+- **Keep-alive notification:** the small icon is the monochrome ST logo, tinted ST red. The text is "SillyTavern stays loaded" / "Tap to open your chat" (played back, not objected to). Tapping opens the app, as today.
+- **Splash, option B "Pulse":** on cold start only, the logo fades in on the Glimmer background (`rgb(24,24,27)`), then the red circuit glows brighter once, like powering on. Under one second in total. It never delays the app: the chat starts loading behind it. The splash is static resources, so it can't follow a changed ST theme; it stays Glimmer *(builder's call)*. Android 12+ SplashScreen with an animated vector icon is the expected route. A CSS-style glow isn't available in vector drawables, so approximate it (e.g. animate the red fill brighter and back, or a soft halo layer's alpha) *(builder's call)*.
+
 ## Constraints
 
 - Nothing on the tablet changes. Reading ST's files over SSH or HTTP is fine.
@@ -106,3 +112,4 @@ Each was shown as a mockup (kept in `.superpowers/brainstorm/83211-1793264355/co
   - **Keyboard performance:** `dumpsys gfxinfo` with 3–4 keyboard open/close cycles stays near the post-fix baseline (janky ≈ 1%, p90 ≈ 17 ms), and no light strip is visible.
   - **Native screens:** screenshots of Panel, Stats, Logs, Settings and dialogs in Glimmer colors. Switch ST to another theme and confirm the native screens follow after the next chat load.
   - **Floating button:** drag, snap, persistence across restart, hidden with the keyboard.
+  - **Icon, notification, splash:** home-screen and themed-icon screenshots, the notification with keep-alive on, and a screen recording of a cold start showing the pulse, with time to the first chat frame no worse than before.
