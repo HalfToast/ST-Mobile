@@ -24,11 +24,14 @@ native screens that manage the server over SSH. It has four screens: Chat, Contr
 ## Navigation
 
 There is no tab bar. A small floating button sits over the chat. Drag it anywhere; it snaps to the left
-or right edge and remembers where you left it. It hides while the keyboard is open. Tap it and it fans
-out three buttons: Control Center, Stats and Logs.
+or right edge and remembers where you left it. It hides while the keyboard or a dropdown's list sheet is
+open. Tap it and it fans out three buttons: Control Center, Stats and Logs.
 
 Those screens open full screen with a slim top bar. It has a back arrow, buttons for the other two
 screens, and on the Control Center a Settings gear.
+
+Movement is short and quick: those screens slide in over the chat and back out, the fan and the list
+sheet slide open and shut, dialogs fade in, and buttons light up softly when pressed.
 
 ## Look
 
@@ -38,7 +41,9 @@ the server is down, the app uses the colors it remembered last. On a fresh insta
 anything, it uses the Glimmer theme. Text uses the same font as SillyTavern (Noto Sans, bundled in the
 app), scaled by SillyTavern's font scale. Logs use Noto Sans Mono.
 
-SillyTavern's dropdowns open as a themed bottom sheet instead of Android's plain list. The sheet is
+SillyTavern's dropdowns open as a themed bottom sheet instead of Android's plain list. Long lists, such
+as a provider's hundreds of models, open quickly and can be searched; very long option names are cut
+short with "…". The sheet is
 injected into the page on the phone only; nothing changes on the tablet. If it cannot attach, the
 dropdown falls back to the plain list. SillyTavern's searchable (select2) dropdowns are restyled to match.
 
@@ -76,11 +81,13 @@ You need JDK 17 and the Android SDK.
 The APK is `app/build/outputs/apk/release/app-release.apk`. Without signing keys it is
 `app-release-unsigned.apk` and the build prints a warning. For debugging use `./gradlew :app:installDebug`.
 
-Two helper scripts live in `tools/`:
+These helpers live in `tools/`:
 
 - `tools/web-test.sh <file.html>` runs a JavaScript test page in headless Chrome, for example
   `tools/web-test.sh app/src/test/web/select-sheet.test.html`.
 - `tools/render-icons.sh` regenerates the icon PNGs from `tools/st-logo.svg`.
+- `tools/bench-select-sheet.html` times how long a 1000-option list takes to open as a sheet in headless
+  Chrome; the command is in the comment at its top.
 
 ### Signing
 
