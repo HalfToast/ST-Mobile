@@ -11,15 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.derivedStateOf
@@ -32,7 +24,16 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import dev.halftoast.stmobile.ui.LocalStPalette
+import dev.halftoast.stmobile.ui.StButton
+import dev.halftoast.stmobile.ui.StMono
+import dev.halftoast.stmobile.ui.StSegmented
+import dev.halftoast.stmobile.ui.fontScale
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -96,27 +97,26 @@ fun LogsScreen(shell: RemoteShell, onOpenSettings: () -> Unit, modifier: Modifie
         }
     }
 
-    Column(modifier.fillMaxSize().padding(horizontal = 12.dp)) {
-        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-            LogKind.entries.forEachIndexed { i, k ->
-                SegmentedButton(
-                    selected = kind == k,
-                    onClick = { kind = k },
-                    shape = SegmentedButtonDefaults.itemShape(i, LogKind.entries.size),
-                ) { Text(k.label) }
-            }
-        }
+    Column(modifier.fillMaxSize().padding(horizontal = 12.dp).padding(top = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        StSegmented(LogKind.entries.map { it.label }, LogKind.entries.indexOf(kind)) { kind = LogKind.entries[it] }
         error?.let { msg ->
-            Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
-                Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(msg, color = MaterialTheme.colorScheme.onErrorContainer)
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        if (hostKeyChanged) {
-                            Button(onClick = onOpenSettings) { Text("Open Settings") }
-                            TextButton(onClick = { attempt++ }) { Text("Retry") }
-                        } else {
-                            Button(onClick = { attempt++ }) { Text("Retry") }
-                        }
+            val p = LocalStPalette.current
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(Color(p.danger))
+                    .border(1.dp, Color(p.dangerBorder), RoundedCornerShape(5.dp))
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(msg, color = Color(p.text))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (hostKeyChanged) {
+                        StButton("Open Settings", onOpenSettings, Modifier.weight(1f))
+                        StButton("Retry", { attempt++ }, Modifier.weight(1f))
+                    } else {
+                        StButton("Retry", { attempt++ }, Modifier.weight(1f))
                     }
                 }
             }
@@ -149,16 +149,24 @@ private fun LogList(lines: List<String>, modifier: Modifier) {
         if (follow && lines.isNotEmpty()) listState.scrollToItem(lines.lastIndex)
     }
     if (lines.isEmpty()) {
-        Text("Waiting for log lines…", color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(8.dp))
+        Text("Waiting for log lines…", color = Color(LocalStPalette.current.muted), modifier = Modifier.padding(8.dp))
         return
     }
+    val p = LocalStPalette.current
+    val size = (12f * fontScale()).sp
     LazyColumn(modifier = modifier.horizontalScroll(hScroll), state = listState) {
         items(lines.size) { i ->
+            val color = when (logTone(lines[i])) {
+                LogTone.Error -> Color(0xFFFF8C8C)
+                LogTone.Warn -> Color(0xFFE8C07A)
+                LogTone.Normal -> Color(p.text)
+            }
             Text(
                 lines[i],
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                lineHeight = 14.sp,
+                color = color,
+                fontFamily = StMono,
+                fontSize = size,
+                lineHeight = size * 1.25f,
                 softWrap = false,
             )
         }

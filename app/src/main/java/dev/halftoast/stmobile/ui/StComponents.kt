@@ -25,6 +25,11 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.SwitchColors
+import androidx.compose.material3.SwitchDefaults
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -71,7 +76,7 @@ private val BoxShape = RoundedCornerShape(5.dp)
 
 /** ST's font scale, recovered from the scaled typography (bodyMedium is 14 sp unscaled). */
 @Composable
-private fun fontScale(): Float = MaterialTheme.typography.bodyMedium.fontSize.value / 14f
+internal fun fontScale(): Float = MaterialTheme.typography.bodyMedium.fontSize.value / 14f
 
 /** Bold-ish heading above a group of controls, like ST's drawer section titles. */
 @Composable
@@ -94,8 +99,9 @@ fun StBox(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> 
             .background(Color(p.box))
             .border(1.dp, Color(p.border), BoxShape)
             .padding(horizontal = 10.dp),
-        content = content,
-    )
+    ) {
+        CompositionLocalProvider(LocalContentColor provides Color(p.text)) { content() }
+    }
 }
 
 /** One label/value row inside an [StBox]; [last] drops the divider. */
@@ -186,10 +192,67 @@ fun StDialog(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Text(title, color = Color(p.text), style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
-            content()
+            CompositionLocalProvider(LocalContentColor provides Color(p.text)) { content() }
             Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 dismiss?.invoke()
                 confirm()
+            }
+        }
+    }
+}
+
+/** Shape shared by ST-style inputs. */
+val StFieldShape = RoundedCornerShape(5.dp)
+
+/** ST-style text field colours: `box` fill, 1 dp `border`, accent when focused, danger on error. */
+@Composable
+fun stTextFieldColors() = LocalStPalette.current.let { p ->
+    OutlinedTextFieldDefaults.colors(
+        focusedTextColor = Color(p.text), unfocusedTextColor = Color(p.text), disabledTextColor = Color(p.muted),
+        focusedContainerColor = Color(p.box), unfocusedContainerColor = Color(p.box), disabledContainerColor = Color(p.box),
+        errorContainerColor = Color(p.box),
+        focusedBorderColor = Color(p.accent), unfocusedBorderColor = Color(p.border), disabledBorderColor = Color(p.border),
+        errorBorderColor = Color(p.dangerBorder),
+        focusedLabelColor = Color(p.accent), unfocusedLabelColor = Color(p.muted), disabledLabelColor = Color(p.muted),
+        cursorColor = Color(p.accent),
+    )
+}
+
+/** Switch tinted with the accent. */
+@Composable
+fun stSwitchColors(): SwitchColors = LocalStPalette.current.let { p ->
+    SwitchDefaults.colors(
+        checkedThumbColor = Color(p.background), checkedTrackColor = Color(p.accent), checkedBorderColor = Color(p.accent),
+        uncheckedThumbColor = Color(p.muted), uncheckedTrackColor = Color(p.box), uncheckedBorderColor = Color(p.border),
+    )
+}
+
+/** Row of ST-style toggle buttons; the selected one gets a `box` fill and accent text. */
+@Composable
+fun StSegmented(options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
+    val p = LocalStPalette.current
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(BoxShape)
+            .border(1.dp, Color(p.border), BoxShape),
+    ) {
+        options.forEachIndexed { i, label ->
+            val on = i == selected
+            Box(
+                Modifier
+                    .weight(1f)
+                    .background(if (on) Color(p.box) else Color.Transparent)
+                    .clickable(role = Role.Tab, onClick = { onSelect(i) })
+                    .padding(vertical = 7.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    label,
+                    color = Color(if (on) p.accent else p.muted),
+                    fontSize = (12.5f * fontScale()).sp,
+                    fontWeight = if (on) FontWeight.SemiBold else FontWeight.Normal,
+                )
             }
         }
     }

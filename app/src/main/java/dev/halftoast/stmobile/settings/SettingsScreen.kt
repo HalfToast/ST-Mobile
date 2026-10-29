@@ -10,24 +10,27 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.consumeWindowInsets
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.background
+import androidx.compose.ui.graphics.Color
+import dev.halftoast.stmobile.ui.LocalStPalette
+import dev.halftoast.stmobile.ui.StButton
+import dev.halftoast.stmobile.ui.StSectionTitle
+import dev.halftoast.stmobile.ui.StTopBar
+import dev.halftoast.stmobile.ui.stSwitchColors
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -86,36 +89,34 @@ fun SettingsScreen(
         }
     }
 
+    val p = LocalStPalette.current
     Scaffold(
         modifier = modifier,
+        containerColor = Color(p.background),
         topBar = {
-            TopAppBar(
-                title = { Text("Settings") },
-                navigationIcon = {
-                    IconButton(onClick = onClose) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-            )
+            Box(Modifier.background(Color(p.background)).windowInsetsPadding(WindowInsets.statusBars)) {
+                StTopBar("Settings", onBack = onClose)
+            }
         },
     ) { padding ->
         Column(
             Modifier
                 .fillMaxSize()
                 .padding(padding)
+                .consumeWindowInsets(padding)
                 .imePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 20.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("Connection", style = MaterialTheme.typography.titleMedium)
+            StSectionTitle("Connection")
             ConnectionFields(form, enabled = true, onChange = { form = it; message = null })
-            Button(onClick = {
+            StButton("Save", modifier = Modifier.fillMaxWidth(), onClick = {
                 val problem = form.validate()
                 if (problem != null) {
                     message = problem
                     messageIsError = true
-                    return@Button
+                    return@StButton
                 }
                 val before = Triple(settings.sshHost, settings.sshPort, settings.sshUser)
                 form.saveSsh(settings)
@@ -126,66 +127,63 @@ fun SettingsScreen(
                 pinned = settings.knownHostKey
                 messageIsError = false
                 message = if (sshChanged) "Saved. Re-run setup to install the app's key for the new SSH details." else "Saved"
-            }) { Text("Save") }
+            })
             message?.let {
-                Text(it, color = if (messageIsError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary)
+                Text(it, color = Color(if (messageIsError) p.dangerBorder else p.accent))
             }
 
-            HorizontalDivider()
-            Text("Background", style = MaterialTheme.typography.titleMedium)
+            HorizontalDivider(color = Color(p.border))
+            StSectionTitle("Background")
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Keep running in the background")
+                    Text("Keep running in the background", color = Color(p.text))
                     Text(
                         "Shows a notification so Android doesn't unload SillyTavern. Applies when you leave Settings.",
+                        color = Color(p.muted),
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                Switch(checked = keepAlive, onCheckedChange = {
+                Switch(checked = keepAlive, colors = stSwitchColors(), onCheckedChange = {
                     keepAlive = it
                     settings.keepAliveEnabled = it
                 })
             }
-            OutlinedButton(
-                onClick = { activity?.let { KeepAliveService.openBatterySettings(it) } },
-            ) { Text("Battery settings") }
+            StButton("Battery settings", { activity?.let { KeepAliveService.openBatterySettings(it) } }, Modifier.fillMaxWidth())
 
-            HorizontalDivider()
-            Text("Tablet SSH", style = MaterialTheme.typography.titleMedium)
+            HorizontalDivider(color = Color(p.border))
+            StSectionTitle("Tablet SSH")
             Text(
                 pinned?.let { "Pinned host key: $it" } ?: "No host key pinned. The next connection will pin it.",
+                color = Color(p.muted),
                 style = MaterialTheme.typography.bodySmall,
             )
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(
-                    enabled = !checkingKey,
-                    onClick = {
-                        checkingKey = true
-                        keyMessage = null
-                        scope.launch {
-                            try {
-                                val check = HostKeyPolicy.check(settings.knownHostKey, shell.presentedHostKey())
-                                if (check is HostKeyCheck.Matches) {
-                                    keyMessage = "The tablet's host key matches the pinned key."
-                                } else {
-                                    toConfirm = check
-                                }
-                            } catch (e: CancellationException) {
-                                throw e
-                            } catch (e: Exception) {
-                                keyMessage = setupErrorMessage(e, keyStage = false)
-                            } finally {
-                                checkingKey = false
+            StButton(
+                "Trust new host key",
+                modifier = Modifier.fillMaxWidth(),
+                enabled = !checkingKey,
+                busy = checkingKey,
+                onClick = {
+                    checkingKey = true
+                    keyMessage = null
+                    scope.launch {
+                        try {
+                            val check = HostKeyPolicy.check(settings.knownHostKey, shell.presentedHostKey())
+                            if (check is HostKeyCheck.Matches) {
+                                keyMessage = "The tablet's host key matches the pinned key."
+                            } else {
+                                toConfirm = check
                             }
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            keyMessage = setupErrorMessage(e, keyStage = false)
+                        } finally {
+                            checkingKey = false
                         }
-                    },
-                ) { Text("Trust new host key") }
-                if (checkingKey) {
-                    Spacer(Modifier.width(16.dp))
-                    CircularProgressIndicator(Modifier.size(24.dp))
-                }
-            }
-            keyMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    }
+                },
+            )
+            keyMessage?.let { Text(it, color = Color(p.text), style = MaterialTheme.typography.bodySmall) }
             toConfirm?.let { check ->
                 TrustHostKeyDialog(
                     check = check,
@@ -200,7 +198,7 @@ fun SettingsScreen(
                     onDismiss = { toConfirm = null },
                 )
             }
-            OutlinedButton(onClick = onRerunSetup) { Text("Re-run setup") }
+            StButton("Re-run setup", onRerunSetup, Modifier.fillMaxWidth())
             Spacer(Modifier.height(24.dp))
         }
     }

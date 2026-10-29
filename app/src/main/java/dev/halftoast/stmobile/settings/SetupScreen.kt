@@ -17,14 +17,9 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -40,6 +35,13 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.graphics.Color
+import dev.halftoast.stmobile.ui.LocalStPalette
+import dev.halftoast.stmobile.ui.StButton
+import dev.halftoast.stmobile.ui.StDialog
+import dev.halftoast.stmobile.ui.StFieldShape
+import dev.halftoast.stmobile.ui.StSectionTitle
+import dev.halftoast.stmobile.ui.stTextFieldColors
 import dev.halftoast.stmobile.StMobileApp
 import dev.halftoast.stmobile.keepalive.KeepAliveService
 import dev.halftoast.stmobile.ssh.HostKeyCheck
@@ -158,10 +160,12 @@ fun SetupScreen(
             .padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Connect to the tablet", style = MaterialTheme.typography.headlineSmall)
+        val p = LocalStPalette.current
+        StSectionTitle("Connect to the tablet")
         Text(
             "The Control Center runs commands on the tablet over SSH. Enter the tablet's password once; " +
                 "the app installs its own key and never stores the password.",
+            color = Color(p.muted),
             style = MaterialTheme.typography.bodyMedium,
         )
         ConnectionFields(form, enabled = !busy, onChange = { form = it })
@@ -177,13 +181,15 @@ fun SetupScreen(
                 autoCorrectEnabled = false,
                 imeAction = ImeAction.Done,
             ),
+            shape = StFieldShape,
+            colors = stTextFieldColors(),
             modifier = Modifier.fillMaxWidth(),
         )
-        keyProblem?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-        error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        keyProblem?.let { Text(it, color = Color(p.dangerBorder)) }
+        error?.let { Text(it, color = Color(p.dangerBorder)) }
         hostKeyChange?.let { change ->
             if (allowTrust) {
-                OutlinedButton(onClick = { confirmTrust = true }, enabled = !busy) { Text("Trust new host key") }
+                StButton("Trust new host key", { confirmTrust = true }, Modifier.fillMaxWidth(), enabled = !busy)
                 if (confirmTrust) {
                     TrustHostKeyDialog(
                         check = change,
@@ -198,19 +204,14 @@ fun SetupScreen(
                     )
                 }
             } else if (onOpenSettings != null) {
-                Text("You can review and trust the new key in Settings.", style = MaterialTheme.typography.bodySmall)
-                OutlinedButton(onClick = onOpenSettings, enabled = !busy) { Text("Open Settings") }
+                Text("You can review and trust the new key in Settings.", color = Color(p.muted), style = MaterialTheme.typography.bodySmall)
+                StButton("Open Settings", onOpenSettings, Modifier.fillMaxWidth(), enabled = !busy)
             }
         }
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = ::connect, enabled = !busy && keyProblem == null) { Text("Connect") }
-            if (busy) {
-                Spacer(Modifier.width(16.dp))
-                CircularProgressIndicator(Modifier.size(24.dp))
-            }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            StButton("Connect", ::connect, Modifier.weight(1f), enabled = !busy && keyProblem == null, busy = busy)
             if (onCancel != null) {
-                Spacer(Modifier.width(8.dp))
-                TextButton(onClick = onCancel, enabled = !busy) { Text("Cancel") }
+                StButton("Cancel", onCancel, Modifier.weight(1f), enabled = !busy)
             }
         }
         Spacer(Modifier.height(24.dp))
@@ -220,31 +221,32 @@ fun SetupScreen(
 @Composable
 fun ConnectionFields(form: ConnectionForm, enabled: Boolean, onChange: (ConnectionForm) -> Unit) {
     val noCorrect = KeyboardOptions(autoCorrectEnabled = false, imeAction = ImeAction.Next)
+    val colors = stTextFieldColors()
     OutlinedTextField(
         value = form.serverUrl, onValueChange = { onChange(form.copy(serverUrl = it)) },
         label = { Text("SillyTavern URL") }, singleLine = true, enabled = enabled,
         isError = !AppSettings.isValidServerUrl(form.serverUrl),
         keyboardOptions = noCorrect.copy(keyboardType = KeyboardType.Uri),
-        modifier = Modifier.fillMaxWidth(),
+        shape = StFieldShape, colors = colors, modifier = Modifier.fillMaxWidth(),
     )
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             value = form.host, onValueChange = { onChange(form.copy(host = it)) },
             label = { Text("SSH host") }, singleLine = true, enabled = enabled,
             keyboardOptions = noCorrect.copy(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.weight(2f),
+            shape = StFieldShape, colors = colors, modifier = Modifier.weight(2f),
         )
         OutlinedTextField(
             value = form.port, onValueChange = { onChange(form.copy(port = it.filter(Char::isDigit).take(5))) },
             label = { Text("Port") }, singleLine = true, enabled = enabled,
             keyboardOptions = noCorrect.copy(keyboardType = KeyboardType.Number),
-            modifier = Modifier.weight(1f),
+            shape = StFieldShape, colors = colors, modifier = Modifier.weight(1f),
         )
     }
     OutlinedTextField(
         value = form.user, onValueChange = { onChange(form.copy(user = it)) },
         label = { Text("SSH user") }, singleLine = true, enabled = enabled,
-        keyboardOptions = noCorrect, modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = noCorrect, shape = StFieldShape, colors = colors, modifier = Modifier.fillMaxWidth(),
     )
     OutlinedTextField(
         value = form.stUserDir, onValueChange = { onChange(form.copy(stUserDir = it)) },
@@ -253,7 +255,7 @@ fun ConnectionFields(form: ConnectionForm, enabled: Boolean, onChange: (Connecti
         supportingText = if (ConnectionForm.isValidStUserDir(form.stUserDir.trim())) null else {
             { Text(ConnectionForm.ST_USER_DIR_ERROR) }
         },
-        keyboardOptions = noCorrect, modifier = Modifier.fillMaxWidth(),
+        keyboardOptions = noCorrect, shape = StFieldShape, colors = colors, modifier = Modifier.fillMaxWidth(),
     )
 }
 
@@ -271,15 +273,14 @@ fun TrustHostKeyDialog(check: HostKeyCheck, onConfirm: () -> Unit, onDismiss: ()
         is HostKeyCheck.Unpinned -> "Pin the tablet's host key?\n\n${check.presented}"
         is HostKeyCheck.Matches -> "The tablet's host key matches the pinned key.\n\n${check.fingerprint}"
     }
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(if (check is HostKeyCheck.Changed) "Trust the new host key?" else "Pin host key?") },
-        text = { Text(body) },
-        confirmButton = {
-            TextButton(onClick = onConfirm) { Text("Trust this key") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } },
-    )
+    StDialog(
+        title = if (check is HostKeyCheck.Changed) "Trust the new host key?" else "Pin host key?",
+        onDismiss = onDismiss,
+        confirm = { StButton("Trust this key", onConfirm, Modifier.padding(horizontal = 8.dp)) },
+        dismiss = { StButton("Cancel", onDismiss, Modifier.padding(horizontal = 8.dp)) },
+    ) {
+        Text(body, color = Color(LocalStPalette.current.text), style = MaterialTheme.typography.bodyMedium)
+    }
 }
 
 internal val ConnectionFormSaver = listSaver<ConnectionForm, String>(

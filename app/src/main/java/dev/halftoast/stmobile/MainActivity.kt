@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.imeAnimationTarget
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -168,16 +169,14 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                     Overlay.Setup -> {
-                        Scaffold(topBar = {
-                            TopAppBar(
-                                title = { Text("Re-run setup") },
-                                navigationIcon = {
-                                    IconButton(onClick = { overlay = Overlay.Settings }) {
-                                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                                    }
-                                },
-                            )
-                        }) { padding ->
+                        Scaffold(
+                            containerColor = Color(palette.background),
+                            topBar = {
+                                Box(Modifier.background(Color(palette.background)).windowInsetsPadding(WindowInsets.statusBars)) {
+                                    StTopBar("Re-run setup", onBack = { overlay = Overlay.Settings })
+                                }
+                            },
+                        ) { padding ->
                             SetupScreen(
                                 settings = settings,
                                 keys = app.keyManager,
