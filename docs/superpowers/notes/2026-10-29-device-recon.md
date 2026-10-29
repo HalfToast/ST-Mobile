@@ -33,4 +33,5 @@ Access URLs: http://127.0.0.1:8000 | Wi-Fi: http://192.168.1.2:8000 | Tailscale:
 
 ## Reload timings
 
-(filled in by Task 3/4)
+- Task 3, cold app start, logged in, WebView HTTP cache warm (not cleared; no asset interceptor yet): `ST_READY ms=13341` (also 12012 after a renderer-kill reload). Login page alone: ~900-990 ms. True empty-cache number not measured (would need clearing app data, which logs out).
+(Task 4 to add cached numbers.)
