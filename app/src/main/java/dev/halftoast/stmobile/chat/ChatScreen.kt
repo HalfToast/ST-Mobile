@@ -17,6 +17,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -25,6 +31,8 @@ import androidx.compose.ui.viewinterop.AndroidView
 @Composable
 fun ChatScreen(holder: WebViewHolder, onOpenControlCenter: () -> Unit, modifier: Modifier = Modifier) {
     val state by holder.state.collectAsState()
+    val context = LocalContext.current
+    val snapshot = remember { Snapshot.load(context)?.asImageBitmap() }
     Box(modifier.fillMaxSize()) {
         AndroidView(
             modifier = Modifier.fillMaxSize(),
@@ -32,7 +40,28 @@ fun ChatScreen(holder: WebViewHolder, onOpenControlCenter: () -> Unit, modifier:
             onRelease = { holder.detach() },
         )
         when (val s = state) {
-            ChatState.Loading -> LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+            ChatState.Loading -> {
+                if (snapshot != null) {
+                    Image(
+                        bitmap = snapshot,
+                        contentDescription = null,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.FillBounds,
+                    )
+                    Surface(
+                        Modifier.align(Alignment.TopCenter).padding(top = 12.dp),
+                        shape = RoundedCornerShape(50),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                    ) {
+                        Text(
+                            "Reconnecting…",
+                            Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                    }
+                }
+                LinearProgressIndicator(Modifier.fillMaxWidth().align(Alignment.TopCenter))
+            }
             ChatState.Ready, ChatState.LoginRequired -> Unit
             is ChatState.Unreachable -> Surface(Modifier.fillMaxSize()) {
                 Column(

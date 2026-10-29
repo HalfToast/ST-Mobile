@@ -21,6 +21,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -33,6 +34,8 @@ import kotlinx.coroutines.withTimeoutOrNull
 import dev.halftoast.stmobile.chat.BackAction
 import dev.halftoast.stmobile.chat.BackPressPolicy
 import dev.halftoast.stmobile.chat.ChatScreen
+import dev.halftoast.stmobile.chat.ChatState
+import dev.halftoast.stmobile.chat.Snapshot
 import dev.halftoast.stmobile.chat.WebViewHolder
 import dev.halftoast.stmobile.settings.AppSettings
 
@@ -45,6 +48,7 @@ enum class Tab(val label: String) {
 
 class MainActivity : ComponentActivity() {
     private lateinit var holder: WebViewHolder
+    private var chatTabShown = true
     private var lastUnconsumedBackAtMs: Long? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,6 +58,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 var selected by rememberSaveable { mutableStateOf(Tab.Chat) }
+                SideEffect { chatTabShown = selected == Tab.Chat }
                 BackHandler {
                     if (selected != Tab.Chat) selected = Tab.Chat else handleChatBack()
                 }
@@ -102,6 +107,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onStop() {
+        if (chatTabShown && holder.state.value == ChatState.Ready) {
+            Snapshot.save(this, holder.webView)
+        }
+        super.onStop()
     }
 
     private fun handleChatBack() {
