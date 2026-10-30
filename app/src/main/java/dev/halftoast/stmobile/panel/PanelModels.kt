@@ -28,6 +28,10 @@ data class DashboardState(
     val userDir: String? = null,
     /** That folder doesn't exist on the server, so the counts are meaningless (all zero). */
     val userDirMissing: Boolean = false,
+    /** The SillyTavern folder, sent only when it has no server.js ([stDirMissing]). */
+    val stDir: String? = null,
+    /** No SillyTavern in that folder: every count and the user folder hint mean nothing. */
+    val stDirMissing: Boolean = false,
     /** The stpanel subcommand of an app-started action still running on the server, if any. */
     val runningAction: String? = null,
 )

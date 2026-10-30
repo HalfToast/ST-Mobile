@@ -6,6 +6,8 @@ import dev.halftoast.stmobile.panel.CharacterStat
 import dev.halftoast.stmobile.panel.InvalidFolderSetting
 import dev.halftoast.stmobile.panel.RemoteCommand
 import dev.halftoast.stmobile.panel.parseStats
+import dev.halftoast.stmobile.panel.stDirMissingIn
+import dev.halftoast.stmobile.panel.stDirMissingMessage
 import dev.halftoast.stmobile.ssh.RemoteShell
 import dev.halftoast.stmobile.ssh.SshError
 import kotlinx.coroutines.CancellationException
@@ -46,6 +48,8 @@ class StatsViewModel(
                 val r = shell.exec(c.command, c.stdin)
                 if (pythonMissing(r.exitCode, r.stderr)) {
                     _ui.update { it.copy(error = PYTHON_MISSING, hostKeyChanged = false) }
+                } else if (r.exitCode != 0 && stDirMissingIn(r.stderr) != null) {
+                    _ui.update { it.copy(error = stDirMissingMessage(stDirMissingIn(r.stderr)), hostKeyChanged = false) }
                 } else if (r.exitCode != 0) {
                     val first = r.stderr.lineSequence().map { it.trim() }.lastOrNull { it.isNotEmpty() }
                     _ui.update {

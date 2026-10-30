@@ -63,6 +63,13 @@ class StatsViewModelTest {
         assertEquals("Couldn't read the stats: bash: no", errorFor(ExecResult(127, "", "bash: no\n")))
     }
 
+    @Test fun aMissingSillyTavernFolderNamesTheSetting() {
+        assertEquals(
+            "SillyTavern wasn't found in /srv/st — check the SillyTavern folder in Settings",
+            errorFor(ExecResult(2, "", "SillyTavern folder not found: /srv/st\n")),
+        )
+    }
+
     @Test fun badFolderSettingsAreNamed() {
         val ok = ExecResult(0, "", "")
         assertEquals(

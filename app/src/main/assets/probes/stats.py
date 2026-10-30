@@ -1,6 +1,6 @@
 # Read-only stats probe: stpanel's character stats logic (STATS_PY), folders from ST_DIR and ST_USER.
 # Prints name\tmessages\tlast_active_epoch\tavatar_png_file (empty if none) for all characters, newest first.
-import os, json, glob, datetime, re
+import os, sys, json, glob, datetime, re
 
 # ST folder as in stpanel: ST_DIR (a leading ~/ expanded), else Termux's SillyTavern if it exists, else ~/SillyTavern.
 home = os.environ.get("HOME") or os.path.expanduser("~")
@@ -15,6 +15,9 @@ elif os.path.isdir("/data/data/com.termux/files/home/SillyTavern"):
     st_dir = "/data/data/com.termux/files/home/SillyTavern"
 else:
     st_dir = os.path.join(home, "SillyTavern")
+if not os.path.isfile(os.path.join(st_dir, "server.js")):
+    sys.stderr.write("SillyTavern folder not found: %s\n" % st_dir)
+    sys.exit(2)
 user_dir = os.path.join(st_dir, "data", os.environ.get("ST_USER") or "default-user")
 chars_dir = os.path.join(user_dir, "characters")
 chats_dir = os.path.join(user_dir, "chats")

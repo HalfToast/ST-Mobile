@@ -399,7 +399,7 @@ class PanelViewModel(
     }
 
     private fun interpret(action: PanelAction, r: ExecResult): ActionResult = when (action) {
-        PanelAction.Backup -> parseBackupResult(r.stdout)
+        PanelAction.Backup -> parseBackupResult(r.stdout + "\n" + r.stderr)
         PanelAction.CleanCache -> parseCleanResult(r.stdout)
         PanelAction.Update -> parseUpdateResult(r.stdout + "\n" + r.stderr, r.exitCode)
         PanelAction.Start, PanelAction.Stop, PanelAction.Restart ->

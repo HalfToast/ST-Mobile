@@ -62,6 +62,27 @@ class ParsersTest {
         assertEquals("default-user", d.userDir)
     }
 
+    @Test fun dashboardStDirMissing() {
+        val d = parseDashboard("online=0\nst_dir_missing=1\nst_dir=/home/me/SillyTavern\nuser_dir=default-user\nuser_dir_missing=1\n")
+        assertTrue(d.stDirMissing)
+        assertEquals("/home/me/SillyTavern", d.stDir)
+        assertEquals(
+            "SillyTavern wasn't found in /home/me/SillyTavern — check the SillyTavern folder in Settings",
+            stDirMissingMessage(d.stDir),
+        )
+        assertFalse(parseDashboard(fixture("dashboard-online.txt")).stDirMissing)
+    }
+
+    @Test fun stDirMissingFromScriptMessages() {
+        assertEquals("/srv/st", stDirMissingIn("SillyTavern folder not found: /srv/st\n"))
+        // stpanel's own wording, with its hint for terminal use.
+        assertEquals(
+            "/srv/my st",
+            stDirMissingIn("stpanel: SillyTavern folder not found: /srv/my st (set ST_DIR to the folder that holds server.js)\n"),
+        )
+        assertNull(stDirMissingIn("Traceback (most recent call last):\n"))
+    }
+
     @Test fun backupOk() {
         val r = parseBackupResult(fixture("stpanel-backup.txt"))
         assertTrue(r is ActionResult.Ok)
@@ -69,7 +90,17 @@ class ParsersTest {
     }
 
     @Test fun backupWithLeadingClear() = assertEquals(ActionResult.Ok("Backup created, 12M"), parseBackupResult(clear + fixture("stpanel-backup.txt")))
-    @Test fun backupFailed() = assertTrue(parseBackupResult("\u001B[1;31m✗ Backup failed.\u001B[0m") is ActionResult.Failed)
+    @Test fun backupFailed() = assertEquals(ActionResult.Failed("Backup failed"), parseBackupResult("\u001B[1;31m✗ Backup failed.\u001B[0m"))
+    @Test fun backupFailedSaysWhy() {
+        assertEquals(
+            ActionResult.Failed("Backup failed: user folder data/typo-user not found (set ST_USER)"),
+            parseBackupResult("=== SillyTavern Quick Backup ===\n\n\u001B[1;31m✗ Backup failed: user folder data/typo-user not found (set ST_USER).\u001B[0m\n"),
+        )
+        assertEquals(
+            ActionResult.Failed("Backup failed: SillyTavern wasn't found in /srv/st — check the SillyTavern folder in Settings"),
+            parseBackupResult("\nstpanel: SillyTavern folder not found: /srv/st (set ST_DIR to the folder that holds server.js)\n"),
+        )
+    }
     @Test fun cleanOk() = assertEquals(ActionResult.Ok("Cache cleared"), parseCleanResult(fixture("stpanel-clean.txt")))
     @Test fun cleanWithLeadingClear() = assertEquals(ActionResult.Ok("Cache cleared"), parseCleanResult(clear + fixture("stpanel-clean.txt")))
     @Test fun cleanCancelled() = assertEquals(ActionResult.Failed("Cache not cleared"), parseCleanResult("Operation cancelled."))
@@ -78,7 +109,30 @@ class ParsersTest {
     @Test fun updateConflictFails() = assertTrue(parseUpdateResult("CONFLICT (content): Merge conflict in public/script.js\nerror: could not apply", 0) is ActionResult.Failed)
     @Test fun updateFastForward() = assertEquals(ActionResult.Ok("Updated to def5678"), parseUpdateResult("Updating abc1234..def5678\nFast-forward\n 1 file changed", 0))
     @Test fun updateUnknown() = assertEquals(ActionResult.Ok("Updated"), parseUpdateResult("Successfully rebased and updated refs/heads/staging.", 0))
-    @Test fun updateNonZeroExit() = assertTrue(parseUpdateResult("something", 1) is ActionResult.Failed)
+    @Test fun updateNonZeroExit() = assertEquals(ActionResult.Failed("Update failed (exit 1)"), parseUpdateResult("something", 1))
+    @Test fun updateFailedSaysWhy() {
+        assertEquals(
+            ActionResult.Failed("Update failed: git not found; install git to update SillyTavern"),
+            parseUpdateResult("=== Updating SillyTavern (git pull) ===\n\nstpanel: git not found; install git to update SillyTavern\n", 1),
+        )
+        assertEquals(
+            ActionResult.Failed("Update failed: /srv/st is not a git checkout, so it can't be updated with git pull"),
+            parseUpdateResult("\nstpanel: /srv/st is not a git checkout, so it can't be updated with git pull\n", 1),
+        )
+        assertEquals(
+            ActionResult.Failed("Update failed: SillyTavern wasn't found in /srv/st — check the SillyTavern folder in Settings"),
+            parseUpdateResult("\nstpanel: SillyTavern folder not found: /srv/st (set ST_DIR to the folder that holds server.js)\n", 1),
+        )
+        // A failed npm install after the pull: stpanel's line wins over npm's own error lines.
+        assertEquals(
+            ActionResult.Failed("Update failed: npm install failed (exit 1); run it in the SillyTavern folder before starting"),
+            parseUpdateResult(
+                "Updating abc1234..def5678\nFast-forward\nnpm error: ETARGET\n" +
+                    "stpanel: npm install failed (exit 1); run it in the SillyTavern folder before starting\n",
+                1,
+            ),
+        )
+    }
 
     @Test fun statsAll() {
         val s = parseStats(fixture("stats.tsv"))

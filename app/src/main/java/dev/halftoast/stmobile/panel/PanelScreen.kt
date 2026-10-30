@@ -237,9 +237,9 @@ private fun StatsGrid(d: DashboardState) {
         StKeyValue("Server battery", battery)
         StKeyValue("Disk free", disk)
         StKeyValue("Cache", d.cacheSize ?: "—")
-        if (d.userDirMissing) {
+        if (d.stDirMissing || d.userDirMissing) {
             Text(
-                userDirMissingMessage(d.userDir),
+                if (d.stDirMissing) stDirMissingMessage(d.stDir) else userDirMissingMessage(d.userDir),
                 Modifier.padding(vertical = 6.dp),
                 color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodyMedium,

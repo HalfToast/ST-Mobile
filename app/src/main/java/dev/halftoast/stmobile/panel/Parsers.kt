@@ -41,6 +41,8 @@ fun parseDashboard(raw: String): DashboardState {
         recentLogs = kv.filter { it.first == "log" }.map { it.second }.take(3),
         userDir = get("user_dir"),
         userDirMissing = get("user_dir_missing") == "1",
+        stDir = get("st_dir"),
+        stDirMissing = get("st_dir_missing") == "1",
         runningAction = get("action"),
     )
 }
@@ -48,6 +50,26 @@ fun parseDashboard(raw: String): DashboardState {
 /** Shown instead of the inventory counts when the dashboard reports `user_dir_missing=1`. */
 fun userDirMissingMessage(userDir: String?): String =
     "SillyTavern user folder '${userDir ?: "?"}' not found — check Settings"
+
+/** Shown when the dashboard reports `st_dir_missing=1`, or a script says the folder isn't there. */
+fun stDirMissingMessage(stDir: String?): String =
+    "SillyTavern wasn't found in ${stDir ?: "?"} — check the SillyTavern folder in Settings"
+
+private val ST_DIR_MISSING = Regex("""SillyTavern folder not found: (.+?)(?: \(set ST_DIR\b.*\))?\s*$""")
+
+/**
+ * The folder named by a script's "SillyTavern folder not found: <path>" line (stats.py's, or
+ * stpanel's with its "(set ST_DIR …)" hint), or null.
+ */
+fun stDirMissingIn(text: String): String? =
+    stripAnsi(text).lineSequence().firstNotNullOfOrNull { ST_DIR_MISSING.find(it.trimEnd('\r'))?.groupValues?.get(1) }
+
+/** Why a stpanel command failed, from its own one-line "stpanel: …" message, in the app's words where it has them. */
+private fun stpanelReason(text: String): String? {
+    stDirMissingIn(text)?.let { return stDirMissingMessage(it) }
+    return stripAnsi(text).lineSequence().map { it.trim() }
+        .firstOrNull { it.startsWith("stpanel: ") }?.removePrefix("stpanel: ")?.trim()?.ifEmpty { null }
+}
 
 fun parseStats(raw: String): List<CharacterStat> =
     stripAnsi(raw).lineSequence().mapNotNull { line ->
@@ -79,14 +101,14 @@ fun parseWhitelistAdd(raw: String): WhitelistAdd? {
     }
 }
 
+/** [raw] is the command's stdout and stderr: stpanel says why a backup failed on either. */
 fun parseBackupResult(raw: String): ActionResult {
     val clean = stripAnsi(raw)
     val size = Regex("""Archive Size:\s*(\S+)""").find(clean)?.groupValues?.get(1)
-    return if (clean.contains("Backup successfully created") && size != null) {
-        ActionResult.Ok("Backup created, $size")
-    } else {
-        ActionResult.Failed("Backup failed")
-    }
+    if (clean.contains("Backup successfully created") && size != null) return ActionResult.Ok("Backup created, $size")
+    val reason = Regex("""Backup failed: (.+?)\.?\s*$""", RegexOption.MULTILINE).find(clean)?.groupValues?.get(1)
+        ?: stpanelReason(clean)
+    return ActionResult.Failed("Backup failed" + (reason?.let { ": $it" } ?: ""))
 }
 
 fun parseCleanResult(raw: String): ActionResult =
@@ -95,6 +117,8 @@ fun parseCleanResult(raw: String): ActionResult =
 
 fun parseUpdateResult(raw: String, exitCode: Int?): ActionResult {
     val clean = stripAnsi(raw)
+    // stpanel's own reason (no git, not a checkout, no folder, npm install failed) over git's or npm's lines.
+    if (exitCode != null && exitCode != 0) stpanelReason(clean)?.let { return ActionResult.Failed("Update failed: $it") }
     if (clean.contains("CONFLICT") || clean.contains("error:") || clean.contains("fatal:")) {
         return ActionResult.Failed(
             clean.lineSequence().firstOrNull { "CONFLICT" in it || "error:" in it || "fatal:" in it }?.trim()

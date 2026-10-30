@@ -58,8 +58,20 @@ object Probes {
             LogKind.Server -> "sillytavern.log"
             LogKind.Access -> "data/access.log"
         }
-        return RemoteCommand(envCommand("sh -s", stDirVar(stDir)), RESOLVE_ST_DIR + "exec tail -n 200 -F \"\$dir/$file\"\n")
+        val script = RESOLVE_ST_DIR + """
+            f="${'$'}dir/$file"
+            if [ ! -f "${'$'}dir/server.js" ]; then echo "$TAIL_NO_ST_DIR${'$'}dir"
+            elif [ ! -e "${'$'}f" ]; then echo "$TAIL_NO_FILE${'$'}f"; fi
+            exec tail -n 200 -F "${'$'}f"
+        """.trimIndent() + "\n"
+        return RemoteCommand(envCommand("sh -s", stDirVar(stDir)), script)
     }
+
+    /** First line of a [tail] when the log file isn't there yet (the path follows); tail -F waits for it. */
+    const val TAIL_NO_FILE = "stmobile:no-file "
+
+    /** First line of a [tail] when the SillyTavern folder has no server.js (the folder follows). */
+    const val TAIL_NO_ST_DIR = "stmobile:no-st-dir "
 
     /** ST folder resolution, as everywhere: ST_DIR (leading `~/` expanded), else Termux's, else `$HOME/SillyTavern`. */
     private val RESOLVE_ST_DIR = """

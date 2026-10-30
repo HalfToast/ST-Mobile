@@ -120,6 +120,8 @@ class ProbeScriptsTest {
         assertEquals("0", d["online"])
         assertEquals("1", d["chars"])
         assertEquals(null, d["user_dir_missing"])
+        assertEquals(null, d["st_dir_missing"])
+        assertEquals(null, d["st_dir"])
         assertTrue("$d", d["disk_free"]!!.isNotBlank())
         assertTrue("$d", d["disk_used_pct"]!!.endsWith("%"))
         // A battery only where there is one (a MacBook's pmset), never an empty or N/A level.
@@ -175,7 +177,58 @@ class ProbeScriptsTest {
         assertEquals("nobody", d["user_dir"])
     }
 
+    @Test fun dashboardNamesAMissingSillyTavernFolder() {
+        val d = dashboard(mapOf("ST_DIR" to "~/Nowhere/SillyTavern", "ST_USER" to "default-user"))
+        assertEquals("1", d["st_dir_missing"])
+        assertEquals(File(home, "Nowhere/SillyTavern").path, d["st_dir"])
+        assertEquals("0", d["online"])
+    }
+
+    // ---- log tails (Probes.tail)
+
+    /** The first line the tail command prints, then it is stopped (tail -F never ends). */
+    private fun firstTailLine(kind: LogKind, stDirSetting: String): String {
+        val tail = Probes.tail(kind, stDirSetting)
+        assertTrue(tail.command, tail.command.endsWith(" sh -s"))
+        val pb = ProcessBuilder("/bin/sh", "-s").directory(root)
+        pb.environment().apply {
+            clear()
+            put("PATH", "/usr/bin:/bin")
+            put("HOME", home.path)
+            if (stDirSetting.isNotEmpty()) put("ST_DIR", stDirSetting)
+        }
+        val p = pb.redirectError(ProcessBuilder.Redirect.to(File("/dev/null"))).start()
+        started += p
+        p.outputStream.use { it.write(tail.stdin!!.toByteArray()) }
+        val line = CompletableFuture.supplyAsync { p.inputStream.bufferedReader().readLine() }.get(10, TimeUnit.SECONDS)
+        p.destroy()
+        return line
+    }
+
+    @Test fun tailSaysWhenTheLogFileIsMissing() {
+        val line = firstTailLine(LogKind.Server, stDirValue)
+        assertEquals("${Probes.TAIL_NO_FILE}${File(stDir, "sillytavern.log").path}", line)
+        assertEquals("${Probes.TAIL_NO_FILE}${File(stDir, "data/access.log").path}", firstTailLine(LogKind.Access, stDirValue))
+    }
+
+    @Test fun tailSaysWhenTheSillyTavernFolderIsMissing() {
+        assertEquals("${Probes.TAIL_NO_ST_DIR}${File(home, "Nowhere").path}", firstTailLine(LogKind.Server, "~/Nowhere"))
+    }
+
+    @Test fun tailShowsAnExistingLog() {
+        File(stDir, "sillytavern.log").writeText("first line\n")
+        assertEquals("first line", firstTailLine(LogKind.Server, stDirValue))
+    }
+
     // ---- stats.py
+
+    @Test fun statsSaysWhenTheSillyTavernFolderIsMissing() {
+        assumeTrue("stats needs python3", File("/usr/bin/python3").canExecute())
+        val r = runProbe(listOf("/usr/bin/python3", "-"), "stats.py", mapOf("ST_DIR" to "~/Nowhere", "ST_USER" to "default-user"))
+        assertNotEquals(0, r.code)
+        assertEquals("", r.out)
+        assertEquals(File(home, "Nowhere").path, stDirMissingIn(r.err))
+    }
 
     @Test fun statsListsACharacter() {
         assumeTrue("stats needs python3", File("/usr/bin/python3").canExecute())
@@ -189,6 +242,7 @@ class ProbeScriptsTest {
     @Test fun statsDefaultsToSillyTavernInHome() {
         assumeTrue("stats needs python3", File("/usr/bin/python3").canExecute())
         File(home, "SillyTavern/data/default-user/characters").mkdirs()
+        File(home, "SillyTavern/server.js").writeText("// fake\n")
         File(home, "SillyTavern/data/default-user/characters/Bob.png").writeText("png")
         val r = runProbe(listOf("/usr/bin/python3", "-"), "stats.py", mapOf("ST_USER" to "default-user"))
         assertEquals(r.err, 0, r.code)

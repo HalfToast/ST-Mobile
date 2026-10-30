@@ -42,6 +42,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import dev.halftoast.stmobile.panel.LogKind
 import dev.halftoast.stmobile.panel.Probes
+import dev.halftoast.stmobile.panel.stDirMissingMessage
 import dev.halftoast.stmobile.panel.stripAnsi
 import dev.halftoast.stmobile.ssh.RemoteShell
 import dev.halftoast.stmobile.ssh.SshError
@@ -59,6 +60,19 @@ private val LogKind.label: String
 /** One shown line: [id] keeps rows stable while old lines drop off the top; [tone] is worked out once. */
 private class LogLine(val id: Long, val text: String, val tone: LogTone)
 
+/** The app's words for a [Probes.tail] notice line, or null for an ordinary log line. */
+internal fun logNotice(line: String, kind: LogKind): String? = when {
+    line.startsWith(Probes.TAIL_NO_ST_DIR) -> stDirMissingMessage(line.removePrefix(Probes.TAIL_NO_ST_DIR))
+    line.startsWith(Probes.TAIL_NO_FILE) -> {
+        val path = line.removePrefix(Probes.TAIL_NO_FILE)
+        when (kind) {
+            LogKind.Server -> "No log file at $path yet. It appears once SillyTavern is started by stpanel or this app."
+            LogKind.Access -> "No access log at $path yet. SillyTavern writes it when a browser connects."
+        }
+    }
+    else -> null
+}
+
 /** Appends [line], keeping only the newest [max] lines. */
 internal fun <T> appendCapped(lines: List<T>, line: T, max: Int = MAX_LINES): List<T> =
     if (lines.size >= max) lines.subList(lines.size - max + 1, lines.size) + line else lines + line
@@ -74,6 +88,7 @@ fun LogsScreen(shell: RemoteShell, stDir: () -> String, onOpenSettings: () -> Un
     var lines by remember { mutableStateOf(emptyList<LogLine>()) }
     var nextId by remember { mutableLongStateOf(0L) }
     var error by remember { mutableStateOf<String?>(null) }
+    var notice by remember { mutableStateOf<String?>(null) }
     var hostKeyChanged by remember { mutableStateOf(false) }
     var attempt by remember { mutableIntStateOf(0) }
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -83,12 +98,17 @@ fun LogsScreen(shell: RemoteShell, stDir: () -> String, onOpenSettings: () -> Un
             // Every (re)start re-emits the last 200 lines, so the buffer and any stale error reset here.
             lines = emptyList()
             error = null
+            notice = null
             hostKeyChanged = false
             try {
                 val tail = Probes.tail(kind, stDir())
+                var first = true
                 shell.stream(tail.command, tail.stdin).collect { raw ->
                     val line = stripAnsi(raw).trimEnd('\r')
-                    lines = appendCapped(lines, LogLine(nextId++, line, logTone(line)))
+                    // Only the stream's first line can be the tail script's notice; it shows until lines come.
+                    val n = if (first) logNotice(line, kind) else null
+                    first = false
+                    if (n != null) notice = n else lines = appendCapped(lines, LogLine(nextId++, line, logTone(line)))
                 }
                 error = "The log stream ended."
             } catch (e: CancellationException) {
@@ -130,13 +150,13 @@ fun LogsScreen(shell: RemoteShell, stDir: () -> String, onOpenSettings: () -> Un
             }
         }
         key(kind) {
-            LogList(lines, Modifier.weight(1f).fillMaxWidth())
+            LogList(lines, notice, Modifier.weight(1f).fillMaxWidth())
         }
     }
 }
 
 @Composable
-private fun LogList(lines: List<LogLine>, modifier: Modifier) {
+private fun LogList(lines: List<LogLine>, notice: String?, modifier: Modifier) {
     val listState = rememberLazyListState()
     val hScroll = rememberScrollState()
     // Follow the tail while the last item is visible; once the user scrolls up, stop following.
@@ -157,7 +177,7 @@ private fun LogList(lines: List<LogLine>, modifier: Modifier) {
         if (follow && lines.isNotEmpty()) listState.scrollToItem(lines.lastIndex)
     }
     if (lines.isEmpty()) {
-        Text("Waiting for log lines…", color = Color(LocalStPalette.current.muted), modifier = Modifier.padding(8.dp))
+        Text(notice ?: "Waiting for log lines…", color = Color(LocalStPalette.current.muted), modifier = Modifier.padding(8.dp))
         return
     }
     val p = LocalStPalette.current

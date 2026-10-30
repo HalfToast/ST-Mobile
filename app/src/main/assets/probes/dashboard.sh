@@ -211,6 +211,12 @@ battery_info() {
 # Single-line, control characters removed.
 clean() { printf '%s' "$1" | tr -d '\000-\037\177'; }
 
+# No SillyTavern in the folder: named, so the app points at that setting rather than the user folder.
+if [ ! -f "$ST_DIR/server.js" ]; then
+    echo "st_dir_missing=1"
+    echo "st_dir=$(clean "$ST_DIR")"
+fi
+
 port=$(get_port)
 
 pid=$(get_sillytavern_pid)
