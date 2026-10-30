@@ -47,7 +47,7 @@ class ConnectionWatch(private val now: () -> Long) {
      */
     fun onVpn(up: Boolean, pageLive: Boolean, tailscaleHost: Boolean): Decision {
         if (!tailscaleHost) {
-            vpnUp = null
+            forgetVpn()
             return Decision.None
         }
         val before = vpnUp
@@ -57,6 +57,15 @@ class ConnectionWatch(private val now: () -> Long) {
             up && before == false && cover != null -> Decision.Probe
             else -> Decision.None
         }
+    }
+
+    /**
+     * The server is not a Tailscale address (any more): the VPN state seen so far was for another
+     * server, so the next report is only a starting point. A plain stop and start keeps it, so a VPN
+     * that went down meanwhile still counts.
+     */
+    fun forgetVpn() {
+        vpnUp = null
     }
 
     /** The page reported a network-level failure of one of ST's requests. */

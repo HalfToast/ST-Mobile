@@ -89,10 +89,13 @@ class ConnectionMonitor(
 
     /**
      * The VPN is watched exactly while started and the server is a Tailscale address. The first report
-     * is the VPN as it is now; a change since stop() still counts.
+     * is the VPN as it is now; a change since stop() still counts, but not across another server
+     * (Tailscale, then a LAN address, then Tailscale again starts afresh).
      */
     private fun syncVpnWatch() {
-        val want = started && tailscaleHost()
+        val tailscale = tailscaleHost()
+        if (!tailscale) watch.forgetVpn()
+        val want = started && tailscale
         if (want == (stopVpnWatch != null)) return
         if (want) {
             stopVpnWatch = probe.watchVpn { up -> scope.launch { handle(watch.onVpn(up, live(), tailscaleHost())) } }

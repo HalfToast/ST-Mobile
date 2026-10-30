@@ -73,7 +73,7 @@ class WebViewHolder(
     val loadAttempts: StateFlow<Int> = _loadAttempts
 
     private val _pageWasLive = MutableStateFlow(false)
-    /** A page from the current server address was loaded ([coversOnConnectionLoss]) since this holder began. */
+    /** A page from the current server address was live ([isLiveServerPage]: Ready or the login form) in this run. */
     val pageWasLive: StateFlow<Boolean> = _pageWasLive
 
     private val _cover = MutableStateFlow<UnreachableCase?>(null)
@@ -94,7 +94,8 @@ class WebViewHolder(
     /** Every state change goes through here: leaving Ready forgets an open sheet. */
     private fun setState(s: ChatState) {
         _state.value = s
-        if (s.coversOnConnectionLoss) _pageWasLive.value = true
+        // Not Stalled: a slow first load turns Stalled on a timer alone, with nothing live yet.
+        if (s.isLiveServerPage) _pageWasLive.value = true
         if (s != ChatState.Ready) _sheetOpen.value = false
         if (!s.coversOnConnectionLoss) _cover.value = null
     }

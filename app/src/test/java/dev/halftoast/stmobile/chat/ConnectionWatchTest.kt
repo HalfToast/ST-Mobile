@@ -34,9 +34,28 @@ class ConnectionWatchTest {
         assertEquals(Decision.None, watch.onVpn(up = true, pageLive = true, tailscaleHost = false))
     }
 
-    @Test fun vpnStateSeenForAnotherServerIsNotAStartingPoint() {
-        watch.onVpn(up = true, pageLive = true, tailscaleHost = false)
-        // Now a Tailscale address: the next report is only the starting point.
+    @Test fun aVpnStateFromBeforeAnotherServerIsNotAStartingPoint() {
+        // What ConnectionMonitor.syncVpnWatch does: Tailscale, then a LAN address (the watch is
+        // unregistered and forgets), then Tailscale again with the page live.
+        vpnWasUp()
+        watch.forgetVpn()
+        assertEquals(Decision.None, watch.onVpn(up = false, pageLive = true, tailscaleHost = true))
+        assertNull(watch.cover)
+        // From then on a change counts again.
+        assertEquals(Decision.None, watch.onVpn(up = true, pageLive = true, tailscaleHost = true))
+        assertEquals(Decision.Cover(UnreachableCase.TailscaleOff), watch.onVpn(up = false, pageLive = true, tailscaleHost = true))
+    }
+
+    @Test fun aStopAndStartKeepsTheVpnState() {
+        // The monitor unregisters on stop and registers on start without forgetting: Tailscale
+        // turned off while the app was in the background covers on return.
+        vpnWasUp()
+        assertEquals(Decision.Cover(UnreachableCase.TailscaleOff), watch.onVpn(up = false, pageLive = true, tailscaleHost = true))
+    }
+
+    @Test fun aReportForAnotherServerForgetsTheVpnState() {
+        vpnWasUp()
+        assertEquals(Decision.None, watch.onVpn(up = true, pageLive = true, tailscaleHost = false))
         assertEquals(Decision.None, watch.onVpn(up = false, pageLive = true, tailscaleHost = true))
         assertNull(watch.cover)
     }
