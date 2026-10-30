@@ -22,8 +22,10 @@ fun parseCssColor(css: String): Int? {
         }
     }
     val m = FUNC.matchEntire(s) ?: return null
-    val ch = (1..3).map { m.groupValues[it].toDoubleOrNull()?.roundToInt()?.coerceIn(0, 255) ?: return null }
-    val a = if (m.groupValues[4].isEmpty()) 1.0 else m.groupValues[4].toDoubleOrNull() ?: return null
+    // toDoubleOrNull takes "NaN" and "Infinity", and NaN.roundToInt() throws.
+    fun num(v: String) = v.toDoubleOrNull()?.takeIf { it.isFinite() }
+    val ch = (1..3).map { num(m.groupValues[it])?.roundToInt()?.coerceIn(0, 255) ?: return null }
+    val a = if (m.groupValues[4].isEmpty()) 1.0 else num(m.groupValues[4]) ?: return null
     return argb((a.coerceIn(0.0, 1.0) * 255).roundToInt(), ch[0], ch[1], ch[2])
 }
 

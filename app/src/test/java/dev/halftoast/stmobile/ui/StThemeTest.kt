@@ -15,6 +15,11 @@ class StThemeTest {
         assertEquals(0x80AADBFF.toInt(), parseCssColor("#aadbff80"))
         assertNull(parseCssColor("transparent")); assertNull(parseCssColor("")); assertNull(parseCssColor("var(--x)"))
     }
+    @Test fun nonFiniteNumbersAreUnreadableNotACrash() {
+        assertNull(parseCssColor("rgba(NaN, 0, 0, 1)"))
+        assertNull(parseCssColor("rgba(0, 0, 0, NaN)"))
+        assertNull(parseCssColor("rgb(Infinity, 0, 0)"))
+    }
     @Test fun parsesShortHex() {
         assertEquals(0xFFAABBCC.toInt(), parseCssColor("#abc"))
     }
