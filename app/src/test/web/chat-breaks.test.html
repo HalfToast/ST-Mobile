@@ -1,0 +1,126 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>chat-breaks tests</title>
+<script src="../../main/assets/web/chat-breaks.js"></script>
+<style>
+  /* SillyTavern's own rules (style.css) that turn every <br> into a full empty line in Chromium. */
+  br { display: block; margin: 2px 0; }
+  .mes_text br { content: " "; }
+  body { font: 16px/1.5 sans-serif; width: 360px; }
+  p { margin: 6px 0 9px; }
+  details { display: block; }
+</style>
+</head>
+<body>
+<div id="chat">
+  <div class="mes"><div class="mes_text" id="m1">
+    <div class="custom-dem-track">tracker</div>
+    <p id="lead"><br><br>Text after the tracker.</p>
+    <p id="plain">Text after the tracker.</p>
+    <p id="middle">a<br><br>b</p>
+    <p id="single">a<br>b</p>
+    <p id="spaced">
+      <br>
+      <br>
+      Text after spaced breaks.</p>
+    <p id="trailing">a<br></p>
+  </div></div>
+  <div class="mes"><div class="mes_text" id="m2">
+    <details class="custom-dem-card custom-dem-status" id="status" open>
+<br>
+<summary>Status</summary><br>
+<div class="custom-dem-status__body" id="statusBody">rows</div>
+<br>
+    </details>
+    <details id="nostatus" open><summary>Plain</summary><div id="plainBody">rows</div></details>
+  </div></div>
+</div>
+<p id="outside"><br>Not a chat message.</p>
+<script>
+(function () {
+  function $(id) { return document.getElementById(id); }
+  function hidden(br) { return getComputedStyle(br).display === 'none'; }
+  function brs(el) { return Array.prototype.slice.call(el.querySelectorAll('br')); }
+  function eq(actual, expected, what) {
+    var a = JSON.stringify(actual), e = JSON.stringify(expected);
+    if (a !== e) throw new Error(what + ': expected ' + e + ', got ' + a);
+  }
+  function ok(cond, what) { if (!cond) throw new Error(what); }
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function h(el) { return Math.round(el.getBoundingClientRect().height); }
+  function topOf(el) { return Math.round(el.getBoundingClientRect().top); }
+
+  var tests = {
+    leadingBreaksAfterTheTrackerAreHidden: function () {
+      eq(brs($('lead')).map(hidden), [true, true], 'both leading breaks hidden');
+      eq(h($('lead')), h($('plain')), 'as tall as the plain paragraph');
+    },
+    breaksBetweenTextStay: function () {
+      eq(brs($('middle')).map(hidden), [false, false], 'a<br><br>b');
+      eq(brs($('single')).map(hidden), [false], 'a<br>b');
+      eq(brs($('trailing')).map(hidden), [false], 'a<br> (after text)');
+    },
+    whitespaceBetweenLeadingBreaksIsStillLeading: function () {
+      eq(brs($('spaced')).map(hidden), [true, true], 'spaced leading breaks');
+    },
+    statusCardHasNoGapUnderItsHeader: function () {
+      var status = $('status'), summary = status.querySelector('summary');
+      var direct = Array.prototype.filter.call(status.children, function (c) { return c.tagName === 'BR'; });
+      eq(direct.map(hidden), [true, true, false], 'before and right after the summary hidden; the trailing one kept');
+      var gap = topOf($('statusBody')) - Math.round(summary.getBoundingClientRect().bottom);
+      var plainGap = topOf($('plainBody')) - Math.round($('nostatus').querySelector('summary').getBoundingClientRect().bottom);
+      eq(gap, plainGap, 'body right under the header');
+    },
+    onlyInsideChatMessages: function () {
+      eq(brs($('outside')).map(hidden), [false], 'outside #chat .mes_text');
+    },
+    messageAddedLater: function () {
+      var mes = document.createElement('div');
+      mes.className = 'mes';
+      mes.innerHTML = '<div class="mes_text"><div class="custom-dem-track">t</div><p id="late"><br><br>Later.</p></div>';
+      $('chat').appendChild(mes);
+      return wait(200).then(function () {
+        eq(brs($('late')).map(hidden), [true, true], 'new message handled');
+      });
+    },
+    streamedMessageIsHandledOnEveryRewrite: function () {
+      var m = $('m1');
+      m.innerHTML = '<p id="s1"><br>Partial</p>';
+      return wait(200).then(function () {
+        eq(brs($('s1')).map(hidden), [true], 'first chunk');
+        m.innerHTML = '<p id="s2"><br><br>Partial reply, longer<br>and more</p>';
+        return wait(200);
+      }).then(function () {
+        eq(brs($('s2')).map(hidden), [true, true, false], 'second chunk');
+        // A chunk that only appends text inside the paragraph.
+        $('s2').insertBefore(document.createTextNode('Now text first'), $('s2').firstChild);
+        return wait(200);
+      }).then(function () {
+        eq(brs($('s2')).map(hidden), [false, false, false], 'breaks after new leading text show again');
+      });
+    },
+  };
+
+  function finish(result) { document.body.dataset.result = result; }
+
+  window.addEventListener('load', function () {
+    // The script marks existing messages after the page has loaded.
+    wait(200).then(function () {
+      var names = Object.keys(tests), i = 0;
+      function next() {
+        if (i >= names.length) return finish('PASS');
+        var name = names[i++];
+        Promise.resolve().then(tests[name]).then(next, function (e) {
+          finish('FAIL: ' + name + ': ' + (e && e.message));
+        });
+      }
+      next();
+    });
+  });
+})();
+</script>
+</body>
+</html>

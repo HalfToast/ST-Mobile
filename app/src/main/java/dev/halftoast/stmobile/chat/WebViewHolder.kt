@@ -48,6 +48,7 @@ class WebViewHolder(
     private val downloads = Downloads(activity, mainHandler)
     private val links = ExternalLinks(activity)
     private val selectSheetScript = SelectSheet.load(activity)
+    private val chatBreaksScript = ChatBreaks.load(activity)
 
     /** Origin the current WebView's page hooks were installed for. Read on Chromium IO threads too. */
     @Volatile private var serverOrigin: String? = Origins.of(appSettings.serverUrl)
@@ -503,6 +504,7 @@ class WebViewHolder(
         ThemeBridge.install(this, serverOrigin, onTheme)
         SelectSheet.installBridge(this, serverOrigin) { open -> onSheetMessage(this, open) }
         SelectSheet.install(this, serverOrigin, selectSheetScript)
+        ChatBreaks.install(this, serverOrigin, chatBreaksScript)
 
         webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
