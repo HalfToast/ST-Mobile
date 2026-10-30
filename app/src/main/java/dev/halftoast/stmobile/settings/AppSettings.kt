@@ -17,6 +17,9 @@ class AppSettings(private val prefs: SharedPreferences) {
         get() = prefs.getString(KEY_SSH_HOST, "") ?: ""
         set(value) = prefs.edit().putString(KEY_SSH_HOST, value).apply()
 
+    /** SSH host and user are both set (Setup, or Settings with SSH filled in). */
+    val hasSsh: Boolean get() = isSshConfigured(sshHost, sshUser)
+
     var sshPort: Int
         get() = prefs.getInt(KEY_SSH_PORT, DEFAULT_SSH_PORT)
         set(value) = prefs.edit().putInt(KEY_SSH_PORT, value).apply()
@@ -76,6 +79,8 @@ class AppSettings(private val prefs: SharedPreferences) {
         private const val KEY_KNOWN_HOST_KEY = "known_host_key"
         private const val KEY_ST_THEME_JSON = "st_theme_json"
 
+        fun isSshConfigured(host: String, user: String): Boolean = host.isNotBlank() && user.isNotBlank()
+
         fun isValidServerUrl(url: String): Boolean {
             val trimmed = url.trim()
             if (trimmed.isEmpty()) return false
@@ -89,6 +94,12 @@ class AppSettings(private val prefs: SharedPreferences) {
         }
     }
 }
+
+/**
+ * Control Center, Stats and Logs run over SSH: they show Setup (not a connection error) until Setup
+ * is done and SSH is still configured (it can be cleared in Settings afterwards).
+ */
+fun sshScreensReady(setupComplete: Boolean, hasSsh: Boolean): Boolean = setupComplete && hasSsh
 
 /**
  * The address to save for an install set up before the app stopped having a built-in one: set up,

@@ -31,6 +31,9 @@ sealed class SshError(msg: String) : Exception(msg) {
 
     class Timeout(msg: String = "Timed out") : SshError(msg)
 
+    /** No SSH host or user saved: nothing to connect to. */
+    class NotSetUp(msg: String = "SSH isn't set up. Add the server's SSH details in Settings.") : SshError(msg)
+
     class HostKeyChanged(val expected: String, val actual: String) :
         SshError("Host key changed: pinned $expected, tablet presented $actual")
 }

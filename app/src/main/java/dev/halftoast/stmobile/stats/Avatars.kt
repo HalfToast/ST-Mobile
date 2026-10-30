@@ -100,6 +100,7 @@ fun httpAvatarFetch(targetPx: Int, serverUrl: () -> String): suspend (String) ->
         var conn: HttpURLConnection? = null
         try {
             val base = serverUrl()
+            if (base.isBlank()) return@withContext null // no address saved
             conn = (URL(avatarUrl(base, file)).openConnection() as HttpURLConnection).apply {
                 connectTimeout = 5000
                 readTimeout = 5000

@@ -160,8 +160,7 @@ class WebViewHolder(
         })
         CookieManager.getInstance().setAcceptCookie(true)
         interceptor = ::serveFromAssetCache
-        enterLoading()
-        loadUrlTimed()
+        load()
     }
 
     fun attach(parent: ViewGroup) {
@@ -185,8 +184,7 @@ class WebViewHolder(
     fun reload() {
         if (destroyed) return
         loadGeneration++ // the old page's readiness poll must not mark this load Ready
-        enterLoading()
-        loadUrlTimed()
+        load()
     }
 
     /** The user's Retry: also forgets earlier renderer crashes. */
@@ -304,6 +302,19 @@ class WebViewHolder(
         filePathCallback = null
     }
 
+    /**
+     * Loading, then the server's page. With no address saved (Chat shows the Connect screen) nothing
+     * loads and nothing is fetched: no Loading deadline either, so the state stays as it is.
+     */
+    private fun load() {
+        if (!appSettings.hasServerUrl) {
+            navToken++ // a load still waiting for /version is dropped
+            return
+        }
+        enterLoading()
+        loadUrlTimed()
+    }
+
     /** Shows the snapshot overlay and arms the ready deadline: Loading never outlasts [READY_TIMEOUT_MS]. */
     private fun enterLoading() {
         _loadAttempts.value++
@@ -323,6 +334,7 @@ class WebViewHolder(
     private fun loadUrlTimed() {
         val serverUrl = appSettings.serverUrl
         val token = ++navToken
+        if (serverUrl.isBlank()) return // no address: no /version fetch, no load
         pendingHttpError = null
         thread(name = "st-version") {
             val start = SystemClock.elapsedRealtime()
@@ -349,7 +361,7 @@ class WebViewHolder(
 
     /** /version needs a session, so a fresh login loads uncached; once Ready, resolve it for later loads. */
     private fun resolveRevisionAfterReady() {
-        if (cacheDisabled() || assetCache.revision != null) return
+        if (cacheDisabled() || assetCache.revision != null || !appSettings.hasServerUrl) return
         if (!resolvingAfterReady.compareAndSet(false, true)) return
         val serverUrl = appSettings.serverUrl
         thread(name = "st-version-late") {

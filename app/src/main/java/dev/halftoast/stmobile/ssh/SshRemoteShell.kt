@@ -149,6 +149,7 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
      * the key exchange). For showing the user what "Trust new host key" would pin.
      */
     suspend fun presentedHostKey(): String = withContext(Dispatchers.IO) {
+        if (!settings.hasSsh) throw SshError.NotSetUp()
         withSshTimeout(15_000) {
             runInterruptible { SshConnect.fetchHostKey(settings.sshHost, settings.sshPort) }
         }
@@ -190,6 +191,8 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
 
     private suspend fun client(): SSHClient = mutex.withLock {
         val target = Target(settings.sshHost, settings.sshPort, settings.sshUser)
+        // A blank host would make sshj connect to this phone itself and report the server unreachable.
+        if (!AppSettings.isSshConfigured(target.host, target.user)) throw SshError.NotSetUp()
         live?.let {
             if (it.target == target && it.client.isConnected && it.client.isAuthenticated) return it.client
             it.client.closeQuietly()

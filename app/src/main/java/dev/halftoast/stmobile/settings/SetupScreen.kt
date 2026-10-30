@@ -60,6 +60,7 @@ import kotlinx.coroutines.withContext
 fun setupErrorMessage(e: Throwable, keyStage: Boolean): String = when (e) {
     is SshError.AuthFailed ->
         if (keyStage) "The key was installed but the tablet didn't accept it. Try again." else "Password rejected"
+    is SshError.NotSetUp -> e.message.orEmpty()
     is SshError.Unreachable -> "Can't reach the tablet. Is Tailscale on?"
     is SshError.Timeout -> "The tablet didn't answer in time. Is Tailscale on?"
     is SshError.HostKeyChanged ->

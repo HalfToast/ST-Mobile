@@ -61,6 +61,7 @@ import java.lang.ref.WeakReference
 import kotlinx.coroutines.launch
 import dev.halftoast.stmobile.chat.ChatScreen
 import dev.halftoast.stmobile.chat.ChatState
+import dev.halftoast.stmobile.chat.ConnectScreen
 import dev.halftoast.stmobile.chat.ConnectionMonitor
 import dev.halftoast.stmobile.chat.Snapshot
 import dev.halftoast.stmobile.chat.UnreachableActions
@@ -84,8 +85,10 @@ import dev.halftoast.stmobile.panel.PanelAction
 import dev.halftoast.stmobile.panel.PanelScreen
 import dev.halftoast.stmobile.panel.PanelViewModel
 import dev.halftoast.stmobile.panel.Probes
+import dev.halftoast.stmobile.settings.ConnectionForm
 import dev.halftoast.stmobile.settings.SettingsScreen
 import dev.halftoast.stmobile.settings.SetupScreen
+import dev.halftoast.stmobile.settings.sshScreensReady
 import dev.halftoast.stmobile.stats.StatsScreen
 import dev.halftoast.stmobile.stats.StatsViewModel
 import dev.halftoast.stmobile.ui.AnimMs
@@ -182,8 +185,18 @@ class MainActivity : ComponentActivity() {
                 LaunchedEffect(lightBars) { applySystemBars(lightBars) }
                 var screen by rememberSaveable { mutableStateOf(Screen.Chat) }
                 var overlay by rememberSaveable { mutableStateOf(Overlay.None) }
-                // Chat works without SSH; Panel, Stats and Logs show Setup until it's done.
+                // Chat works without SSH; Panel, Stats and Logs show Setup until it's done, and again
+                // if SSH is cleared in Settings afterwards.
                 var setupDone by rememberSaveable { mutableStateOf(settings.setupComplete) }
+                var sshSetUp by remember { mutableStateOf(settings.hasSsh) }
+                // Chat shows the Connect screen until a SillyTavern address is saved.
+                var serverUrlSaved by remember { mutableStateOf(settings.hasServerUrl) }
+                val rereadSettings = {
+                    sshSetUp = settings.hasSsh
+                    serverUrlSaved = settings.hasServerUrl
+                }
+                // Settings and Re-run setup save both; read them again whenever one of them closes.
+                LaunchedEffect(overlay) { rereadSettings() }
                 val imeTarget = WindowInsets.imeAnimationTarget
                 val density = LocalDensity.current
                 // The native screen drawn over Chat (sliding in, shown, or sliding out); null once Chat
@@ -218,7 +231,7 @@ class MainActivity : ComponentActivity() {
                         // The Control Center's own Start; Chat then recovers the way it does after a
                         // Start there (Ruling 18). Without SSH set up, the Control Center shows Setup.
                         onStartServer = {
-                            if (setupDone) {
+                            if (sshScreensReady(setupDone, sshSetUp)) {
                                 panelVm.request(PanelAction.Start)
                                 // request() ignores a Start while something runs; run() marks it busy at once.
                                 panelVm.ui.value.busy == PanelAction.Start
@@ -278,6 +291,7 @@ class MainActivity : ComponentActivity() {
                                 shell = app.remoteShell,
                                 onComplete = { urlChanged ->
                                     setupDone = true
+                                    rereadSettings()
                                     overlay = Overlay.Settings
                                     if (urlChanged) holder.onServerUrlChanged()
                                 },
@@ -296,7 +310,23 @@ class MainActivity : ComponentActivity() {
                                     .fillMaxSize()
                                     .background(Color(palette.background)),
                             ) {
-                                ChatScreen(
+                                // Jump straight to the keyboard's final height: following the slide frame
+                                // by frame resizes the WebView, and so re-lays-out SillyTavern, every frame.
+                                val chatInsets = Modifier
+                                    .windowInsetsPadding(WindowInsets.systemBars)
+                                    .windowInsetsPadding(WindowInsets.imeAnimationTarget)
+                                if (!serverUrlSaved) {
+                                    // Nothing is loaded until then (WebViewHolder loads nothing without an address).
+                                    ConnectScreen(
+                                        initialUrl = settings.serverUrl,
+                                        onConnect = { url ->
+                                            val changed = ConnectionForm.from(settings).copy(serverUrl = url).saveServerUrl(settings)
+                                            serverUrlSaved = settings.hasServerUrl
+                                            if (changed) holder.onServerUrlChanged()
+                                        },
+                                        modifier = chatInsets,
+                                    )
+                                } else ChatScreen(
                                     holder = holder,
                                     unreachable = { s ->
                                         // Collected here only: dashboard updates never recompose the chat.
@@ -327,11 +357,7 @@ class MainActivity : ComponentActivity() {
                                             retrying = checking,
                                         )
                                     },
-                                    // Jump straight to the keyboard's final height: following the slide frame
-                                    // by frame resizes the WebView, and so re-lays-out SillyTavern, every frame.
-                                    modifier = Modifier
-                                        .windowInsetsPadding(WindowInsets.systemBars)
-                                        .windowInsetsPadding(WindowInsets.imeAnimationTarget),
+                                    modifier = chatInsets,
                                 )
                                 backMenu?.let { spot ->
                                     BackMenu(
@@ -355,8 +381,11 @@ class MainActivity : ComponentActivity() {
                         covering?.let { shown ->
                             NativeScreen(
                                 shown = shown,
-                                setupDone = setupDone,
-                                onSetupDone = { setupDone = true },
+                                sshReady = sshScreensReady(setupDone, sshSetUp),
+                                onSetupDone = {
+                                    setupDone = true
+                                    rereadSettings()
+                                },
                                 onNavigate = { screen = it },
                                 onOpenSettings = { overlay = Overlay.Settings },
                                 // Only this layer moves; Chat underneath stays put.
@@ -369,11 +398,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /** Control Center, Stats or Logs ([shown]) full screen under its top bar; Setup until that's done. */
+    /** Control Center, Stats or Logs ([shown]) full screen under its top bar; Setup until [sshReady]. */
     @Composable
     private fun NativeScreen(
         shown: Screen,
-        setupDone: Boolean,
+        sshReady: Boolean,
         onSetupDone: () -> Unit,
         onNavigate: (Screen) -> Unit,
         onOpenSettings: () -> Unit,
@@ -396,7 +425,7 @@ class MainActivity : ComponentActivity() {
                     }
                 }
                 when {
-                    !setupDone -> SetupScreen(
+                    !sshReady -> SetupScreen(
                         settings = app.settings,
                         keys = app.keyManager,
                         shell = app.remoteShell,
@@ -475,11 +504,19 @@ class MainActivity : ComponentActivity() {
         private var currentHolder = WeakReference<WebViewHolder>(null)
     }
 
+    /**
+     * SillyTavern's UI is what the user sees. Not on the Connect screen (no address: nothing loaded),
+     * nor while Unreachable, Loading, Stalled, External, or covered (connection lost).
+     */
+    private fun stPageShown(): Boolean =
+        (application as StMobileApp).settings.hasServerUrl && holder.state.value.backProbesPage && holder.cover.value == null
+
     private fun handleChatBack() {
+        // The Connect screen: no page to step back in or poke; back opens the menu.
+        if (!(application as StMobileApp).settings.hasServerUrl) return onBackDecided(consumed = false)
         if (holder.goBackIfOffOrigin()) return
-        // Unreachable, Loading, Stalled, External, or covered (connection lost): the page is hidden or
-        // isn't SillyTavern's UI, so don't poke it; back opens the menu.
-        if (!holder.state.value.backProbesPage || holder.cover.value != null) return onBackDecided(consumed = false)
+        // The page is hidden or isn't SillyTavern's UI: don't poke it; back opens the menu.
+        if (!stPageShown()) return onBackDecided(consumed = false)
         holder.probeBack(::onBackDecided)
     }
 
@@ -490,7 +527,7 @@ class MainActivity : ComponentActivity() {
     private fun onBackDecided(consumed: Boolean) {
         if (consumed) return
         val edge = menuEdge(lastBackEdge)
-        if (!holder.state.value.backProbesPage || holder.cover.value != null) {
+        if (!stPageShown()) {
             backMenu = MenuSpot(edge, menuBottomGapDp(null))
             return
         }
