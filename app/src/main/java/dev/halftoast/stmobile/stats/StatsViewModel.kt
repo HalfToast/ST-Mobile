@@ -43,7 +43,9 @@ class StatsViewModel(
             try {
                 val c = command()
                 val r = shell.exec(c.command, c.stdin)
-                if (r.exitCode != 0) {
+                if (r.exitCode == 127 && "python3" in r.stderr) {
+                    _ui.update { it.copy(error = PYTHON_MISSING, hostKeyChanged = false) }
+                } else if (r.exitCode != 0) {
                     val first = r.stderr.lineSequence().map { it.trim() }.lastOrNull { it.isNotEmpty() }
                     _ui.update {
                         it.copy(error = "Couldn't read the stats" + (first?.let { f -> ": $f" } ?: ""), hostKeyChanged = false)
@@ -59,6 +61,10 @@ class StatsViewModel(
                 _ui.update { it.copy(loading = false) }
             }
         }
+    }
+
+    private companion object {
+        const val PYTHON_MISSING = "Stats needs Python 3 on the server (on a Mac: install the Command Line Tools)"
     }
 
     private fun describe(e: Exception): String = when (e) {

@@ -1,11 +1,21 @@
-# Read-only stats probe: stpanel character_stats_browser logic (lines 274-351), user dir from ST_USER.
+# Read-only stats probe: stpanel's character stats logic (STATS_PY), folders from ST_DIR and ST_USER.
 # Prints name\tmessages\tlast_active_epoch\tavatar_png_file (empty if none) for all characters, newest first.
 import os, json, glob, datetime, re
 
-st_dir = "/data/data/com.termux/files/home/SillyTavern"
-if not os.path.isdir(st_dir):
-    st_dir = os.path.join(os.path.expanduser("~"), "SillyTavern")
-user_dir = os.path.join(st_dir, "data", os.environ.get("ST_USER", "default-user"))
+# ST folder as in stpanel: ST_DIR (a leading ~/ expanded), else Termux's SillyTavern if it exists, else ~/SillyTavern.
+home = os.environ.get("HOME") or os.path.expanduser("~")
+st_dir = os.environ.get("ST_DIR") or ""
+if st_dir:
+    if st_dir == "~":
+        st_dir = home
+    elif st_dir.startswith("~/"):
+        st_dir = os.path.join(home, st_dir[2:])
+    st_dir = st_dir.rstrip("/") or "/"
+elif os.path.isdir("/data/data/com.termux/files/home/SillyTavern"):
+    st_dir = "/data/data/com.termux/files/home/SillyTavern"
+else:
+    st_dir = os.path.join(home, "SillyTavern")
+user_dir = os.path.join(st_dir, "data", os.environ.get("ST_USER") or "default-user")
 chars_dir = os.path.join(user_dir, "characters")
 chats_dir = os.path.join(user_dir, "chats")
 backups_dir = os.path.join(user_dir, "backups")
