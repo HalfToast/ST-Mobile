@@ -1,0 +1,4 @@
+# Scripts that run on servers and in containers keep LF endings, even in a Windows checkout.
+server/stpanel text eol=lf
+*.sh text eol=lf
+*.py text eol=lf
