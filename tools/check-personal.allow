@@ -2,7 +2,7 @@
 # <path> is exact; <regex> (extended) must match the hit's line. Every entry needs a reason.
 
 # Tailscale as one VPN option
-README.md:^- \*\*Tailscale\.\*\* Install Tailscale on Windows|with the PC's Tailscale address # the WSL guide's Tailscale option, one way to reach WSL next to Wi-Fi
+README.md:^- \*\*Tailscale\.\*\* Install Tailscale on Windows|with the PC's Tailscale address|^  Tailscale's addresses instead of your home network|reaching WSL through the PC's Tailscale address # the WSL guide's Tailscale option, one way to reach WSL next to Wi-Fi
 server/stpanel:Tailscale/VPN|Tailscale VPN:|\| Tailscale: http|Wi-Fi, Tailscale\) # stpanel lists a Tailscale address as one way to reach the server, next to Wi-Fi
 
 # The Tailscale-address rule (100.64.0.0/10, fd7a:115c:a1e0::/48, *.ts.net), its messages, its button and their tests

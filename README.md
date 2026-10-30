@@ -150,8 +150,9 @@ sudo systemctl enable --now ssh
 ```
 
 Other distributions have the same `openssh` package and `sshd` service under their own names. If a
-firewall such as `ufw` is on, allow SSH and SillyTavern's port: `sudo ufw allow 22/tcp` and
-`sudo ufw allow 8000/tcp`.
+firewall such as `ufw` is on, allow SSH and SillyTavern's port from your own network only (or your VPN's
+range), for example `sudo ufw allow from 192.168.1.0/24 to any port 22 proto tcp` and the same with
+port 8000.
 
 ### macOS
 
@@ -159,11 +160,22 @@ Open System Settings > General > Sharing, turn on **Remote Login**, and click th
 to choose which users may log in. Use your Mac user name and password in the app. If the macOS firewall
 is on, allow `node` to accept incoming connections when macOS asks.
 
+### After setup: turn off password login (optional)
+
+Once the app has installed its key, you can stop the SSH server from accepting passwords: set
+`PasswordAuthentication no` in its config (`/etc/ssh/sshd_config`; on Termux
+`$PREFIX/etc/ssh/sshd_config`) and restart it. Turn it back on before you use Re-run setup.
+
 ## Windows: SillyTavern in WSL
 
 Native Windows (SillyTavern started from PowerShell or `Start.bat`) isn't supported. Run SillyTavern in
 WSL instead: it is then a Linux server, and everything above applies. These steps use Ubuntu, the
 default distribution.
+
+Not every step here has been tried on a Windows machine: the Task Scheduler tasks (and whether
+SillyTavern keeps running after `wsl.exe` exits), `instanceIdleTimeout` on the older WSL built into
+Windows 10, and reaching WSL through the PC's Tailscale address. If one of them doesn't work for you,
+please [open an issue](https://github.com/HalfToast/ST-Mobile/issues).
 
 **1. Install WSL.** Open PowerShell as administrator, run this, and restart the PC:
 
@@ -228,11 +240,11 @@ it by default. Choose one:
   ```
 
   Run `wsl --shutdown`, then open Ubuntu again. Windows' Hyper-V firewall blocks incoming connections to
-  WSL by default; allow SillyTavern's port and SSH from an administrator PowerShell:
+  WSL by default; allow SillyTavern's port and SSH on private networks from an administrator PowerShell:
 
   ```powershell
-  New-NetFirewallHyperVRule -Name "SillyTavern" -DisplayName "SillyTavern" -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Protocol TCP -LocalPorts 8000
-  New-NetFirewallHyperVRule -Name "WSL-SSH" -DisplayName "WSL SSH" -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Protocol TCP -LocalPorts 22
+  New-NetFirewallHyperVRule -Name "SillyTavern" -DisplayName "SillyTavern" -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Protocol TCP -LocalPorts 8000 -Profiles Private
+  New-NetFirewallHyperVRule -Name "WSL-SSH" -DisplayName "WSL SSH" -Direction Inbound -VMCreatorId '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}' -Protocol TCP -LocalPorts 22 -Profiles Private
   ```
 
   If Windows itself runs an SSH server on port 22, give WSL's `sshd` another port (`Port 2222` in
@@ -244,7 +256,7 @@ it by default. Choose one:
   ```powershell
   netsh interface portproxy add v4tov4 listenport=8000 listenaddress=0.0.0.0 connectport=8000 connectaddress=<WSL address>
   netsh interface portproxy add v4tov4 listenport=2222 listenaddress=0.0.0.0 connectport=22 connectaddress=<WSL address>
-  New-NetFirewallRule -DisplayName "SillyTavern via WSL" -Direction Inbound -Protocol TCP -LocalPort 8000,2222 -Action Allow
+  New-NetFirewallRule -DisplayName "SillyTavern via WSL" -Direction Inbound -Protocol TCP -LocalPort 8000,2222 -Profile Private -RemoteAddress LocalSubnet -Action Allow
   ```
 
   The phone then uses the PC's address, with port 2222 for SSH. WSL's address can change when WSL
@@ -253,7 +265,13 @@ it by default. Choose one:
   (`basicAuthMode` or user accounts) rather than the whitelist.
 
 - **Tailscale.** Install Tailscale on Windows (Tailscale recommends the Windows side, not inside WSL),
-  then use mirrored networking or the port proxy as above, with the PC's Tailscale address.
+  then use mirrored networking or the port proxy as above, with the PC's Tailscale address. Allow
+  Tailscale's addresses instead of your home network: add `-RemoteAddresses 100.64.0.0/10` to the
+  Hyper-V rules, or use `-RemoteAddress 100.64.0.0/10` in the port proxy's rule.
+
+These rules apply only while Windows counts the network as **Private**. Set your home Wi-Fi to Private
+in Windows' network settings, and leave public Wi-Fi as Public, so SillyTavern and SSH stay closed
+there.
 
 **5. Keep WSL and SillyTavern running.** WSL shuts a distribution down shortly after its last window
 closes, and SillyTavern and SSH stop with it. To keep it running, add this to `%UserProfile%\.wslconfig`
@@ -323,7 +341,7 @@ Environment variables:
 - `STPANEL_REFRESH`: seconds between refreshes of the interactive panel (default 5).
 
 stpanel only ever looks up and stops the SillyTavern in its own folder: the process in its pid file, and
-`node` processes running that folder's `server.js`. Other Node apps on the machine are left alone. It
+`node` processes running that folder's `server.js` or started from that folder. Other Node apps on the machine are left alone. It
 starts SillyTavern as `node server.js`, without `npm install`: run `./start.sh` once after cloning, and
 again after an update that changes SillyTavern's packages.
 
