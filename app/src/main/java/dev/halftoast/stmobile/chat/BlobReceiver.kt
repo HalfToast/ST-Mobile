@@ -51,7 +51,10 @@ class BlobReceiver(
         expected[nonce] = Expected(fallbackName, now())
     }
 
-    /** Handles a JSON message. Returns the reply for the page (`ack:<nonce>` / `abort:<nonce>`), or null. */
+    /**
+     * Handles a JSON message. Returns the reply for the page (`ack:<nonce>` / `abort:<nonce>`), or null.
+     * A chunk for a transfer already swept or failed is answered `abort:` so the page lets go of its blob.
+     */
     fun onText(text: String): String? {
         val json = try {
             JSONObject(text)
@@ -62,7 +65,7 @@ class BlobReceiver(
         return when (json.optString("t")) {
             "start" -> start(nonce, json)
             "chunk" -> {
-                val t = transfers[nonce] ?: return null
+                val t = transfers[nonce] ?: return "abort:$nonce"
                 val bytes = try {
                     Base64.getDecoder().decode(json.getString("b64"))
                 } catch (e: Throwable) {
@@ -106,7 +109,7 @@ class BlobReceiver(
     fun onBinary(data: ByteArray): String? {
         if (data.size < NONCE_BYTES) return null
         val nonce = data.copyOfRange(0, NONCE_BYTES).toHex()
-        val t = transfers[nonce] ?: return null
+        val t = transfers[nonce] ?: return "abort:$nonce"
         return append(t, data, NONCE_BYTES, data.size - NONCE_BYTES)
     }
 

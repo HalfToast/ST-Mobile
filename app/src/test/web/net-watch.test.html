@@ -70,6 +70,15 @@
         eq(failures(), before, 'not counted');
       });
     },
+    aDeadBlobUrlIsNotReported: function () {
+      var before = failures();
+      var url = URL.createObjectURL(new Blob(['x']));
+      URL.revokeObjectURL(url);
+      return fetch(url).then(null, function (e) {
+        ok(e === NET_ERROR, 'the same rejection');
+        eq(failures(), before, 'not counted');
+      });
+    },
     postsAreSpacedOut: function () {
       return Promise.all([fetch('/a'), fetch('/b'), fetch('/c')].map(function (p) { return p.catch(function () {}); }))
         .then(function () {

@@ -26,6 +26,7 @@
   var FALLBACK_MS = 100;
 
   var pending = [];   // .mes_text elements to re-check
+  var QUEUED = '__stmQueued'; // set on an element while it is in [pending]: a chat of thousands loads in one batch
   var scheduled = false;
 
   function injectCss() {
@@ -69,6 +70,7 @@
     pending = [];
     for (var i = 0; i < batch.length; i++) {
       try {
+        batch[i][QUEUED] = false;
         if (batch[i].isConnected) check(batch[i]);
       } catch (e) { /* leave this message as ST renders it */ }
     }
@@ -88,7 +90,9 @@
   }
 
   function queue(mesText) {
-    if (pending.indexOf(mesText) < 0) pending.push(mesText);
+    if (mesText[QUEUED]) return;
+    mesText[QUEUED] = true;
+    pending.push(mesText);
   }
 
   /** The messages a mutation touched: the one around its target, and any added whole. */

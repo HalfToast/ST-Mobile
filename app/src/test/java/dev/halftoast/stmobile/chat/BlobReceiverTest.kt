@@ -71,14 +71,14 @@ class BlobReceiverTest {
         rx.onText(msg("start", "size" to 0))
         rx.onText(msg("done", "size" to 0))
         assertNull(rx.onText(msg("start", "size" to 0))) // replay
-        assertNull(rx.onBinary(bin(byteArrayOf(1))))
+        assertEquals("abort:$nonce", rx.onBinary(bin(byteArrayOf(1)))) // not taken; the page is told to stop
         assertEquals(1, files.size)
     }
 
     @Test fun unknownNonceIsIgnoredSilently() {
         assertNull(rx.onText(msg("start", "size" to 1)))
         assertNull(rx.onText(msg("fail", "error" to "x")))
-        assertNull(rx.onBinary(bin(byteArrayOf(1))))
+        assertEquals("abort:$nonce", rx.onBinary(bin(byteArrayOf(1)))) // only "stop" back to the page
         assertTrue(files.isEmpty())
         assertTrue(reports.isEmpty()) // a script can't spam toasts with made-up nonces
     }
@@ -142,7 +142,11 @@ class BlobReceiverTest {
         rx.sweep()
         assertTrue(files.single().aborted)
         assertEquals(listOf(BlobReceiver.FAILED), reports)
-        assertNull(rx.onBinary(bin(byteArrayOf(2)))) // late chunks are dropped
+        // A late chunk is dropped and tells the page to stop, so it lets go of the blob.
+        assertEquals("abort:$nonce", rx.onBinary(bin(byteArrayOf(2))))
+        assertEquals("abort:$nonce", rx.onText(msg("chunk", "b64" to "AQ==")))
+        assertEquals(listOf(BlobReceiver.FAILED), reports)
+        assertTrue(rx.isIdle)
     }
 
     @Test fun totalTimeIsBounded() {

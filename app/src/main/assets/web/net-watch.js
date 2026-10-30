@@ -39,7 +39,10 @@
 
   function sameOrigin(url) {
     try {
-      return new URL(String(url), location.href).origin === location.origin;
+      var u = new URL(String(url), location.href);
+      // A blob: URL carries the page's origin, but fetching a revoked one is no network failure.
+      if (u.protocol === 'blob:' || u.protocol === 'data:') return false;
+      return u.origin === location.origin;
     } catch (e) {
       return false;
     }
