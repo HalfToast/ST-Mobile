@@ -6,7 +6,10 @@
 #   tools/test-stpanel-linux.sh            run every image
 #   tools/test-stpanel-linux.sh alpine     run the images given
 #
-# The repo is mounted read-only. A fake node (argv[0] "node", idles until TERM) stands in for
+# The repo is mounted read-only. Before the containers start, the app's own commands for status,
+# start, the dashboard and stop are exported to app/build/linux-smoke (the ActionScriptExport unit
+# test, through Gradle); inside, they run under dash as the app sends them (SKIP if the export failed).
+# A fake node (argv[0] "node", idles until TERM) stands in for
 # SillyTavern; the whitelist checks use the container's real node with a yaml package mounted
 # 2.x from the host (~/Developer/*/node_modules/yaml or app/build/test-node/node_modules/yaml) and
 # are skipped, with a SKIP line, when either is missing. Prints PASS/FAIL/SKIP per check and exits
@@ -21,13 +24,18 @@ if [ "$1" != "--inside" ]; then
         # yaml 2.x (SillyTavern's; stpanel uses its parseDocument API)
         grep -Eq '"version"[[:space:]]*:[[:space:]]*"2\.' "$d/package.json" 2>/dev/null && { yaml=$(cd "$d" && pwd -P); break; }
     done
+    rm -rf "$repo/app/build/linux-smoke"
+    echo "Exporting the app's commands (Gradle)..."
+    if ! (cd "$repo" && ./gradlew -q :app:testDebugUnitTest --tests 'dev.halftoast.stmobile.panel.ActionScriptExport' --rerun >/dev/null 2>&1); then
+        echo "warning: the export failed; the dash checks will be skipped" >&2
+    fi
     status=0
     for image in "${images[@]}"; do
         case "$image" in
             debian*|ubuntu*)
                 setup='apt-get update -qq >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends procps iproute2 nodejs python3 >/dev/null 2>&1' ;;
             alpine*)
-                setup='apk add -q --no-cache bash nodejs python3 >/dev/null 2>&1' ;;
+                setup='apk add -q --no-cache bash dash nodejs python3 >/dev/null 2>&1' ;;
             *)
                 echo "unknown image $image (debian*, ubuntu* or alpine*)" >&2; exit 2 ;;
         esac
@@ -193,7 +201,8 @@ check "stop ends startst's supervisor loop" eval '! alive "$sup"'
 # ---- other folders and processes that only mention node are left alone
 (cd "$OTHER" && exec "$FAKEBIN/node" --max-old-space-size=2048 server.js) >/dev/null 2>&1 &
 other1=$!
-(cd "$W" && exec "$FAKEBIN/node" --max-old-space-size=2048 "$OTHER/server.js") >/dev/null 2>&1 &
+# Started from this folder, but given another folder's absolute server.js: still not this one.
+(cd "$ST" && exec "$FAKEBIN/node" --max-old-space-size=2048 "$OTHER/server.js") >/dev/null 2>&1 &
 other2=$!
 (cd "$ST" && exec sh -c 'while :; do sleep 1; done' nodemon server.js) >/dev/null 2>&1 &
 mention=$!
@@ -327,6 +336,36 @@ else
     out=$(probe "bash -s" whitelist.sh ST_DIR="~/My Apps/SillyTavern" 2>&1); rc=$?
     check "whitelist.sh reads the mode and entries in a folder with a space" \
         eval '[ "$rc" -eq 0 ] && [ "$out" = "$(printf "mode=true\nentry=127.0.0.1")" ]'
+fi
+
+# ---- the app's own commands under dash: `<command line>` run by dash -c, its script on stdin,
+# with sh being dash (Debian's /bin/sh is dash, Termux's sh too; Alpine's is busybox, so a link).
+EXPORT=/repo/app/build/linux-smoke
+if ! command -v dash >/dev/null 2>&1; then
+    skip "dash: the app's commands" "no dash"
+elif [ ! -f "$EXPORT/action-stop.cmd" ]; then
+    skip "dash: the app's commands" "not exported (see the warning before the containers)"
+else
+    rm -f "$ST/sillytavern.pid"
+    mkdir -p "$W/dashbin" && ln -sf "$(command -v dash)" "$W/dashbin/sh"
+    app() { # app <name>
+        env -i PATH="$W/dashbin:$FAKEBIN:/usr/local/bin:/usr/bin:/bin" HOME="$W" TMPDIR="$W/tmp" \
+            dash -c "$(cat "$EXPORT/$1.cmd")" < "$EXPORT/$1.stdin"
+    }
+    out=$(app action-status 2>&1); rc=$?
+    check "dash: status exits 0 and says OFFLINE" eval '[ "$rc" -eq 0 ] && grep -q "OFFLINE" <<< "$out"'
+    out=$(app action-start 2>&1); rc=$?
+    check "dash: start exits 0" [ "$rc" -eq 0 ]
+    pid=$(tr -dc '0-9' < "$ST/sillytavern.pid" 2>/dev/null)
+    check "dash: start's server is alive" eval '[ -n "$pid" ] && alive "$pid"'
+    sleep 0.3
+    out=$(app dashboard 2>&1); rc=$?
+    check "dash: dashboard says online with that pid" \
+        eval '[ "$rc" -eq 0 ] && grep -qx "online=1" <<< "$out" && grep -qx "pid=$pid" <<< "$out"'
+    out=$(app action-stop 2>&1); rc=$?
+    check "dash: stop exits 0" [ "$rc" -eq 0 ]
+    check "dash: stop ends the server" eval '[ -n "$pid" ] && ! alive "$pid"'
+    check "dash: stop ends the supervisor" [ "$(count "$WATCHDOG" "$ST")" -eq 0 ]
 fi
 
 pkill -f "$W" 2>/dev/null
