@@ -22,8 +22,8 @@
 # <ST_DIR>/sillytavern.log, backups in <ST_DIR>/backups/.
 #
 # Only processes of this SillyTavern folder are ever looked up or stopped: the
-# pid file's process, node processes running <ST_DIR>/server.js or started from
-# <ST_DIR>, and supervisor loops naming <ST_DIR>.
+# pid file's process, node processes (argv[0] node) running <ST_DIR>/server.js or
+# started from <ST_DIR>, and supervisor loops naming <ST_DIR>.
 # ==============================================================================
 
 TERMUX_HOME="/data/data/com.termux/files/home"
@@ -59,6 +59,7 @@ WATCHDOG_TEXT="Watchdog reviving in 2 seconds"
 
 # Colors & formatting, only on a terminal (captured output and pipes get plain text)
 if [ -t 1 ]; then
+    USE_COLOR=1
     CLR_RESET="\033[0m"
     CLR_BOLD="\033[1m"
     CLR_DIM="\033[2m"
@@ -74,6 +75,7 @@ if [ -t 1 ]; then
     BG_BLUE="\033[44m"
     BG_DARK="\033[40m"
 else
+    USE_COLOR=0
     CLR_RESET="" CLR_BOLD="" CLR_DIM="" CLR_UNDERLINE="" CLR_RED="" CLR_GREEN=""
     CLR_YELLOW="" CLR_BLUE="" CLR_MAGENTA="" CLR_CYAN="" CLR_WHITE="" CLR_GRAY=""
     BG_BLUE="" BG_DARK=""
@@ -187,8 +189,15 @@ find_node() {
 
 # Alive and not a zombie.
 pid_alive() {
+    local state
     [ -n "$1" ] && kill -0 "$1" 2>/dev/null || return 1
-    case "$(ps -p "$1" -o stat= 2>/dev/null)" in
+    if [ -r "/proc/$1/stat" ]; then
+        # The state follows the parenthesised command name: "<pid> (<comm>) <state> ...".
+        state=$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -c 1)
+    else
+        state=$(ps -p "$1" -o stat= 2>/dev/null)
+    fi
+    case "$state" in
         *Z*) return 1 ;;
     esac
     return 0
@@ -199,6 +208,18 @@ proc_args() {
         tr '\0' ' ' < "/proc/$1/cmdline" 2>/dev/null
     else
         ps -p "$1" -ww -o args= 2>/dev/null
+    fi
+}
+
+# The program name the process was started as (argv[0]).
+proc_argv0() {
+    local a
+    if [ -r "/proc/$1/cmdline" ]; then
+        tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null | head -n 1
+    else
+        a=$(ps -p "$1" -ww -o args= 2>/dev/null)
+        a=${a#"${a%%[! ]*}"}
+        echo "${a%% *}"
     fi
 }
 
@@ -230,11 +251,16 @@ candidate_pids() {
 
 # A node process serving this folder's server.js (never a supervisor loop).
 is_st_server() {
-    local args cwd d
+    local args argv0 cwd d
+    argv0=$(proc_argv0 "$1")
+    case "${argv0##*/}" in
+        node|nodejs) ;;
+        *) return 1 ;;
+    esac
     args=" $(proc_args "$1") "
     case "$args" in
         *"$WATCHDOG_TEXT"*) return 1 ;;
-        *node*server.js*) ;;
+        *server.js*) ;;
         *) return 1 ;;
     esac
     for d in "$ST_DIR" "$ST_DIR_REAL"; do
@@ -494,52 +520,120 @@ restart_server() {
 # Information
 # ------------------------------------------------------------------------------
 
-# Network detection (LAN, Tailscale, Localhost)
-get_network_info() {
-    local ifcfg_bin lan_ip ts_ip port
-    ifcfg_bin="$TERMUX_BIN/ifconfig"
-    [ ! -x "$ifcfg_bin" ] && ifcfg_bin="ifconfig"
+# LAN and VPN interface names, as awk regular expressions.
+LAN_IFACES='^(wl|eth|en)'
+VPN_IFACES='^(tailscale|utun|tun|wg)'
 
-    if command -v "$ifcfg_bin" >/dev/null 2>&1 || [ -x "$ifcfg_bin" ]; then
-        lan_ip=$("$ifcfg_bin" 2>/dev/null | awk '/^[a-zA-Z0-9_-]+:/ { iface=$1; sub(/:$/, "", iface) } /inet / { if (iface ~ /^(wlan|eth)/) print $2 }' | head -n 1)
-        ts_ip=$("$ifcfg_bin" 2>/dev/null | awk '/^[a-zA-Z0-9_-]+:/ { iface=$1; sub(/:$/, "", iface) } /inet / { if (iface ~ /^(tun|tailscale|wg)/) print $2 }' | head -n 1)
-    fi
-
-    # Fallbacks
-    [ -z "$lan_ip" ] && lan_ip=$(ip -4 addr show 2>/dev/null | awk '/inet / { if ($NF ~ /^(wlan|eth)/) { split($2, a, "/"); print a[1] } }' | head -n 1)
-    [ -z "$ts_ip" ] && ts_ip=$(ip -4 addr show 2>/dev/null | awk '/inet / { if ($NF ~ /^(tun|tailscale|wg)/) { split($2, a, "/"); print a[1] } }' | head -n 1)
-
-    port=$(get_port)
-
-    echo "${lan_ip}|${ts_ip}|${port}"
+# First IPv4 address (not loopback) of an interface matching $1, from `ip -4 addr` output on stdin.
+ip_addr_of() {
+    awk -v re="$1" '$1 == "inet" { split($2, a, "/"); if ($NF ~ re && a[1] !~ /^127\./) { print a[1]; exit } }'
 }
 
-get_system_info() {
-    local bat_level bat_status bat_str disk_info ram_info
-    # Battery
-    if [ -f /sys/class/power_supply/battery/capacity ]; then
-        bat_level=$(cat /sys/class/power_supply/battery/capacity 2>/dev/null)
-        bat_status=$(cat /sys/class/power_supply/battery/status 2>/dev/null)
-        if [ "$bat_status" = "Charging" ]; then
-            bat_str="${bat_level}% ⚡ (Charging)"
-        elif [ "$bat_status" = "Full" ]; then
-            bat_str="${bat_level}% 🔋 (Full)"
-        else
-            bat_str="${bat_level}% (${bat_status})"
-        fi
-    else
-        bat_str="N/A"
+# The same from ifconfig output: net-tools/BSD ("inet 1.2.3.4") or busybox ("inet addr:1.2.3.4").
+ifconfig_addr_of() {
+    awk -v re="$1" '
+        /^[^ \t]/ { iface = $1; sub(/:$/, "", iface) }
+        $1 == "inet" { a = $2; sub(/^addr:/, "", a); if (iface ~ re && a !~ /^127\./) { print a; exit } }'
+}
+
+# Network detection (LAN, Tailscale/VPN, port): "lan|vpn|port", unknown addresses empty.
+get_network_info() {
+    local out lan_ip ts_ip ifcfg_bin d
+    if command -v ip >/dev/null 2>&1; then
+        out=$(ip -4 addr show 2>/dev/null)
+        lan_ip=$(printf '%s\n' "$out" | ip_addr_of "$LAN_IFACES")
+        ts_ip=$(printf '%s\n' "$out" | ip_addr_of "$VPN_IFACES")
     fi
+    if [ -z "$lan_ip" ] || [ -z "$ts_ip" ]; then
+        # Termux ships its own ifconfig; Android's ip often may not read the interfaces.
+        ifcfg_bin=""
+        for d in "$TERMUX_BIN/ifconfig" "$(command -v ifconfig 2>/dev/null)" /sbin/ifconfig /usr/sbin/ifconfig; do
+            [ -n "$d" ] && [ -x "$d" ] && { ifcfg_bin=$d; break; }
+        done
+        if [ -n "$ifcfg_bin" ]; then
+            out=$("$ifcfg_bin" 2>/dev/null)
+            [ -z "$lan_ip" ] && lan_ip=$(printf '%s\n' "$out" | ifconfig_addr_of "$LAN_IFACES")
+            [ -z "$ts_ip" ] && ts_ip=$(printf '%s\n' "$out" | ifconfig_addr_of "$VPN_IFACES")
+        fi
+    fi
+    echo "${lan_ip}|${ts_ip}|$(get_port)"
+}
 
-    # Storage
-    disk_info=$(df -h "$HOME" 2>/dev/null | awk 'NR==2 {print $4 " free (" $5 " used)"}')
-    [ -z "$disk_info" ] && disk_info="N/A"
+# A command from PATH or, on macOS, from the sbin folders a minimal PATH leaves out.
+find_tool() {
+    local d
+    command -v "$1" 2>/dev/null && return 0
+    for d in /usr/sbin /sbin /usr/bin; do
+        [ -x "$d/$1" ] && { echo "$d/$1"; return 0; }
+    done
+    return 1
+}
 
-    # Device RAM
-    ram_info=$(free -m 2>/dev/null | awk '/Mem:/ { printf "%.1fG / %.1fG", $3/1024, $2/1024 }')
-    [ -z "$ram_info" ] && ram_info="N/A"
+# "level|status" of the battery, nothing when there is none (or it can't be read).
+# Termux: /sys/class/power_supply/battery; Linux/WSL: the first BAT*; macOS: pmset.
+battery_info() {
+    local d level status line pmset_bin
+    for d in /sys/class/power_supply/battery /sys/class/power_supply/BAT*; do
+        [ -r "$d/capacity" ] || continue
+        level=$(tr -dc '0-9' < "$d/capacity" 2>/dev/null)
+        [ -n "$level" ] || continue
+        status=$(head -n 1 "$d/status" 2>/dev/null)
+        echo "${level}|${status}"
+        return 0
+    done
+    pmset_bin=$(find_tool pmset) || return 0
+    # " -InternalBattery-0 (id=...)	80%; discharging; 4:10 remaining present: true"
+    line=$("$pmset_bin" -g batt 2>/dev/null | sed -n 's/.*[[:space:]]\([0-9][0-9]*\)%; *\([^;]*\);.*/\1|\2/p' | head -n 1)
+    [ -n "$line" ] || return 0
+    level=${line%%|*}
+    case "${line#*|}" in
+        charged) status="Full" ;;
+        charging|"finishing charge") status="Charging" ;;
+        discharging) status="Discharging" ;;
+        "AC attached") status="Not charging" ;;
+        *) status=${line#*|} ;;
+    esac
+    echo "${level}|${status}"
+}
 
-    echo "${bat_str}|${disk_info}|${ram_info}"
+# "used / total" memory of the device, nothing when unknown.
+ram_info() {
+    local out total sysctl_bin vmstat_bin
+    out=$(free -m 2>/dev/null | awk '/^Mem:/ { if ($2 > 0) printf "%.1fG / %.1fG", $3/1024, $2/1024 }')
+    if [ -z "$out" ] && [ -r /proc/meminfo ]; then
+        out=$(awk '/^MemTotal:/ { t = $2 } /^MemAvailable:/ { a = $2 }
+            END { if (t > 0 && a != "") printf "%.1fG / %.1fG", (t - a)/1048576, t/1048576 }' /proc/meminfo 2>/dev/null)
+    fi
+    if [ -z "$out" ] && sysctl_bin=$(find_tool sysctl) && vmstat_bin=$(find_tool vm_stat); then
+        # macOS: used = active + wired + compressed pages, as Activity Monitor roughly counts it.
+        total=$("$sysctl_bin" -n hw.memsize 2>/dev/null | tr -dc '0-9')
+        [ -n "$total" ] && out=$("$vmstat_bin" 2>/dev/null | awk -v total="$total" '
+            /page size of/ { for (i = 1; i <= NF; i++) if ($i == "of") pg = $(i + 1) }
+            /^Pages active:/ { used += $3 }
+            /^Pages wired down:/ { used += $4 }
+            /^Pages occupied by compressor:/ { used += $5 }
+            END { if (pg > 0 && total > 0) printf "%.1fG / %.1fG", used * pg / 1073741824, total / 1073741824 }')
+    fi
+    echo "$out"
+}
+
+# "battery|disk|ram" for display; each part empty when unknown.
+get_system_info() {
+    local bat bat_level bat_status bat_str="" disk_info ram
+    bat=$(battery_info)
+    if [ -n "$bat" ]; then
+        bat_level=${bat%%|*}
+        bat_status=${bat#*|}
+        case "$bat_status" in
+            Charging) bat_str="${bat_level}% ⚡ (Charging)" ;;
+            Full) bat_str="${bat_level}% 🔋 (Full)" ;;
+            "") bat_str="${bat_level}%" ;;
+            *) bat_str="${bat_level}% (${bat_status})" ;;
+        esac
+    fi
+    disk_info=$(df -Ph "$HOME" 2>/dev/null | awk 'NR == 2 && $4 != "" { print $4 " free (" $5 " used)" }')
+    ram=$(ram_info)
+    echo "${bat_str}|${disk_info}|${ram}"
 }
 
 count_entries() {
@@ -635,23 +729,35 @@ view_access_logs() {
 }
 
 update_sillytavern() {
+    local rc=0
     cls
     echo -e "${CLR_BOLD}${CLR_CYAN}=== Updating SillyTavern (git pull) ===${CLR_RESET}\n"
-    if [ -d "$ST_DIR" ]; then
+    if ! command -v git >/dev/null 2>&1; then
+        echo "stpanel: git not found; install git to update SillyTavern" >&2
+        rc=1
+    elif [ ! -e "$ST_DIR/.git" ]; then
+        echo "stpanel: $ST_DIR is not a git checkout, so it can't be updated with git pull" >&2
+        rc=1
+    else
         (cd "$ST_DIR" && git pull --rebase --autostash)
+        rc=$?
         CACHED_GIT_DATA=""
         CACHED_NET_DATA=""
         rm -f "${ST_DIR}/.git/.last_fetch_check" 2>/dev/null
-    else
-        echo -e "${CLR_RED}Directory $ST_DIR does not exist.${CLR_RESET}"
     fi
     wait_for_enter
+    return $rc
 }
 
 create_backup() {
     cls
     echo -e "${CLR_BOLD}${CLR_CYAN}=== SillyTavern Quick Backup ===${CLR_RESET}\n"
-    local ts backup_name backup_path
+    local ts backup_name backup_path rc
+    if [ ! -d "$USER_DIR" ]; then
+        echo -e "${CLR_RED}✗ Backup failed: user folder data/${ST_USER} not found (set ST_USER).${CLR_RESET}"
+        wait_for_enter
+        return 1
+    fi
     ts=$(date +%Y%m%d_%H%M%S)
     backup_name="st_backup_${ts}.tar.gz"
     backup_path="${BACKUP_DIR}/${backup_name}"
@@ -660,25 +766,33 @@ create_backup() {
     echo -e "Compressing characters, chats, worlds, and settings..."
     echo -e "${CLR_DIM}(Excluding internal auto-backups for speed and compact size)${CLR_RESET}"
 
-    tar --exclude="data/${ST_USER}/backups" -czf "$backup_path" -C "$ST_DIR" "data/${ST_USER}" config.yaml 2>/dev/null
+    if [ -f "$CONFIG_FILE" ]; then
+        tar --exclude="data/${ST_USER}/backups" -czf "$backup_path" -C "$ST_DIR" "data/${ST_USER}" config.yaml 2>/dev/null
+    else
+        tar --exclude="data/${ST_USER}/backups" -czf "$backup_path" -C "$ST_DIR" "data/${ST_USER}" 2>/dev/null
+    fi
+    rc=$?
 
-    if [ -f "$backup_path" ]; then
+    if [ "$rc" -eq 0 ] && [ -f "$backup_path" ]; then
         local b_size
         b_size=$(ls -lh "$backup_path" | awk '{print $5}')
         echo -e "\n${CLR_GREEN}✓ Backup successfully created!${CLR_RESET}"
         echo -e "  Location: ${CLR_WHITE}${backup_path}${CLR_RESET}"
         echo -e "  Archive Size: ${CLR_CYAN}${b_size}${CLR_RESET}"
     else
+        rm -f "$backup_path"
         echo -e "\n${CLR_RED}✗ Backup failed.${CLR_RESET}"
+        rc=1
     fi
     wait_for_enter
+    return $rc
 }
 
 clean_cache() {
     cls
     echo -e "${CLR_BOLD}${CLR_CYAN}=== SillyTavern Cache Cleaner ===${CLR_RESET}\n"
     local cache_dir="${DATA_DIR}/_cache"
-    local cur_size
+    local cur_size confirm
     cur_size=$(du -sh "$cache_dir" 2>/dev/null | awk '{print $1}')
     [ -z "$cur_size" ] && cur_size="0M"
 
@@ -686,22 +800,30 @@ clean_cache() {
     echo -e "Current cache size:      ${CLR_YELLOW}${cur_size}${CLR_RESET}\n"
     echo -en "Clean cache and reclaim disk space? [y/N]: "
     read -r confirm
-    if [[ "$confirm" =~ ^[yY]$ ]]; then
-        rm -rf "${cache_dir:?}"/* 2>/dev/null
-        echo -e "\n${CLR_GREEN}✓ Cache successfully cleared!${CLR_RESET}"
-    else
-        echo -e "\nOperation cancelled."
-    fi
+    case "$confirm" in
+        y|Y)
+            rm -rf "${cache_dir:?}"/* 2>/dev/null
+            echo -e "\n${CLR_GREEN}✓ Cache successfully cleared!${CLR_RESET}"
+            ;;
+        *)
+            echo -e "\nOperation cancelled."
+            ;;
+    esac
     wait_for_enter
 }
 
-character_stats_browser() {
-    cls
-    echo -e "${CLR_BOLD}${CLR_CYAN}=== Character & Chat Activity Monitor ===${CLR_RESET}\n"
-    python3 -c '
+# Character activity table. Reads ST_DIR, ST_USER, STPANEL_COLOR (1 = ANSI colours) and
+# STPANEL_LIMIT (rows, 0 = all) from the environment; nothing is pasted into the source.
+STATS_PY='
 import os, json, glob, datetime, re
 
-user_dir = "'"$USER_DIR"'"
+user_dir = os.path.join(os.environ["ST_DIR"], "data", os.environ.get("ST_USER") or "default-user")
+limit = int(os.environ.get("STPANEL_LIMIT") or "0")
+color = os.environ.get("STPANEL_COLOR") == "1"
+
+def paint(code, text):
+    return "\033[" + code + "m" + text + "\033[0m" if color else text
+
 chars_dir = os.path.join(user_dir, "characters")
 chats_dir = os.path.join(user_dir, "chats")
 backups_dir = os.path.join(user_dir, "backups")
@@ -720,7 +842,7 @@ if os.path.exists(stats_file):
                         "words": v.get("user_word_count", 0) + v.get("non_user_word_count", 0),
                         "last_active": v.get("date_last_chat", 0) / 1000 if v.get("date_last_chat") else 0
                     }
-    except:
+    except Exception:
         pass
 
 all_chars = {}
@@ -743,10 +865,9 @@ if os.path.exists(backups_dir):
             m = re.match(r"^chat_(.+?)_(\d{8}-\d{6})\.jsonl$", bf)
             if m:
                 c_slug = m.group(1).replace("_", " ").lower()
-                date_str = m.group(2)
                 try:
-                    ts = datetime.datetime.strptime(date_str, "%Y%m%d-%H%M%S").timestamp()
-                except:
+                    ts = datetime.datetime.strptime(m.group(2), "%Y%m%d-%H%M%S").timestamp()
+                except Exception:
                     ts = 0
                 for k in all_chars:
                     norm_k = k.replace("-", " ").replace("_", " ")
@@ -759,41 +880,61 @@ if os.path.exists(chats_dir):
     for cd in os.listdir(chats_dir):
         k = cd.lower()
         if k in all_chars:
-            cpath = os.path.join(chats_dir, cd)
-            for jf in glob.glob(os.path.join(cpath, "*.jsonl")):
+            for jf in glob.glob(os.path.join(chats_dir, cd, "*.jsonl")):
                 mtime = os.path.getmtime(jf)
                 if mtime > all_chars[k]["last_active"]:
                     all_chars[k]["last_active"] = mtime
                     all_chars[k]["latest_file"] = jf
 
-for k, v in all_chars.items():
+for v in all_chars.values():
     if v["messages"] == 0 and v["latest_file"] and os.path.exists(v["latest_file"]):
         try:
             with open(v["latest_file"], "rb") as fp:
                 lines = sum(1 for _ in fp) - 1
                 if lines > 0:
                     v["messages"] = lines
-        except:
+        except Exception:
             pass
 
 sorted_chars = sorted(all_chars.values(), key=lambda x: x["last_active"], reverse=True)
 total = len(sorted_chars)
+shown = sorted_chars[:limit] if limit > 0 else sorted_chars
 
 if total == 0:
     print("  (No characters found in " + chars_dir + ")")
 else:
-    print(f"\033[1m%-28s | %-10s | %-16s\033[0m" % ("Character", "Messages", "Last Active"))
-    print("\033[0;90m" + "-" * 62 + "\033[0m")
-    for c in sorted_chars[:20]:
-        dt_str = datetime.datetime.fromtimestamp(c["last_active"]).strftime("%Y-%m-%d %H:%M") if c["last_active"] > 0 else "\033[2mNever\033[0m"
+    rule = paint("0;90", "-" * 62)
+    print(paint("1", "%-28s | %-10s | %-16s" % ("Character", "Messages", "Last Active")))
+    print(rule)
+    for c in shown:
+        if c["last_active"] > 0:
+            dt_str = datetime.datetime.fromtimestamp(c["last_active"]).strftime("%Y-%m-%d %H:%M")
+        else:
+            dt_str = paint("2", "Never")
         msgs_str = "%d" % c["messages"] if c["messages"] > 0 else "-"
-        print(f"%-28s | %-10s | %-16s" % (c["name"][:28], msgs_str, dt_str))
-    if total > 20:
-        print("\033[0;90m" + "-" * 62 + "\033[0m")
-        print(f"\033[2mShowing top 20 of {total} characters (sorted by most recently active)\033[0m")
+        print("%-28s | %-10s | %s" % (c["name"][:28], msgs_str, dt_str))
+    if len(shown) < total:
+        print(rule)
+        print(paint("2", "Showing top %d of %d characters (sorted by most recently active)" % (len(shown), total)))
 '
+
+# Prints the character table: $1 rows (0 = all).
+print_character_stats() {
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "stpanel: python3 not found; character stats need Python 3" >&2
+        return 1
+    fi
+    ST_DIR="$ST_DIR" ST_USER="$ST_USER" STPANEL_COLOR="$USE_COLOR" STPANEL_LIMIT="$1" python3 -c "$STATS_PY"
+}
+
+character_stats_browser() {
+    local rc opt
+    cls
+    echo -e "${CLR_BOLD}${CLR_CYAN}=== Character & Chat Activity Monitor ===${CLR_RESET}\n"
+    print_character_stats 20
+    rc=$?
     if [ "$IS_SUBCOMMAND" = "1" ]; then
-        return 0
+        return $rc
     fi
 
     flush_input
@@ -803,111 +944,172 @@ else:
     if [ "$opt" = "a" ] || [ "$opt" = "A" ]; then
         cls
         echo -e "${CLR_BOLD}${CLR_CYAN}=== All Characters (Sorted by Last Active) ===${CLR_RESET}\n"
-        python3 -c '
-import os, json, glob, datetime, re
-
-user_dir = "'"$USER_DIR"'"
-chars_dir = os.path.join(user_dir, "characters")
-chats_dir = os.path.join(user_dir, "chats")
-backups_dir = os.path.join(user_dir, "backups")
-stats_file = os.path.join(user_dir, "stats.json")
-
-stats = {}
-if os.path.exists(stats_file):
-    try:
-        with open(stats_file) as f:
-            raw = json.load(f)
-            for k, v in raw.items():
-                if isinstance(v, dict):
-                    clean = k.replace(".png", "").replace("default_", "").lower()
-                    stats[clean] = {
-                        "messages": v.get("user_msg_count", 0) + v.get("non_user_msg_count", 0),
-                        "words": v.get("user_word_count", 0) + v.get("non_user_word_count", 0),
-                        "last_active": v.get("date_last_chat", 0) / 1000 if v.get("date_last_chat") else 0
-                    }
-    except:
-        pass
-
-all_chars = {}
-if os.path.exists(chars_dir):
-    for f in os.listdir(chars_dir):
-        if f.endswith((".png", ".json")):
-            name = os.path.splitext(f)[0]
-            k = name.lower()
-            all_chars[k] = {
-                "name": name,
-                "messages": stats.get(k, {}).get("messages", 0),
-                "words": stats.get(k, {}).get("words", 0),
-                "last_active": stats.get(k, {}).get("last_active", 0),
-                "latest_file": None
-            }
-
-if os.path.exists(backups_dir):
-    for bf in os.listdir(backups_dir):
-        if bf.startswith("chat_") and bf.endswith(".jsonl"):
-            m = re.match(r"^chat_(.+?)_(\d{8}-\d{6})\.jsonl$", bf)
-            if m:
-                c_slug = m.group(1).replace("_", " ").lower()
-                date_str = m.group(2)
-                try:
-                    ts = datetime.datetime.strptime(date_str, "%Y%m%d-%H%M%S").timestamp()
-                except:
-                    ts = 0
-                for k in all_chars:
-                    norm_k = k.replace("-", " ").replace("_", " ")
-                    if norm_k in c_slug or c_slug in norm_k:
-                        if ts > all_chars[k]["last_active"]:
-                            all_chars[k]["last_active"] = ts
-                            all_chars[k]["latest_file"] = os.path.join(backups_dir, bf)
-
-if os.path.exists(chats_dir):
-    for cd in os.listdir(chats_dir):
-        k = cd.lower()
-        if k in all_chars:
-            cpath = os.path.join(chats_dir, cd)
-            for jf in glob.glob(os.path.join(cpath, "*.jsonl")):
-                mtime = os.path.getmtime(jf)
-                if mtime > all_chars[k]["last_active"]:
-                    all_chars[k]["last_active"] = mtime
-                    all_chars[k]["latest_file"] = jf
-
-for k, v in all_chars.items():
-    if v["messages"] == 0 and v["latest_file"] and os.path.exists(v["latest_file"]):
-        try:
-            with open(v["latest_file"], "rb") as fp:
-                lines = sum(1 for _ in fp) - 1
-                if lines > 0:
-                    v["messages"] = lines
-        except:
-            pass
-
-sorted_chars = sorted(all_chars.values(), key=lambda x: x["last_active"], reverse=True)
-print(f"\033[1m%-28s | %-10s | %-16s\033[0m" % ("Character", "Messages", "Last Active"))
-print("\033[0;90m" + "-" * 62 + "\033[0m")
-for c in sorted_chars:
-    dt_str = datetime.datetime.fromtimestamp(c["last_active"]).strftime("%Y-%m-%d %H:%M") if c["last_active"] > 0 else "\033[2mNever\033[0m"
-    msgs_str = "%d" % c["messages"] if c["messages"] > 0 else "-"
-    print(f"%-28s | %-10s | %-16s" % (c["name"][:28], msgs_str, dt_str))
-'
+        print_character_stats 0
         wait_for_enter
     fi
 }
 
+# ------------------------------------------------------------------------------
+# Whitelist (config.yaml, edited with SillyTavern's own yaml package)
+# ------------------------------------------------------------------------------
+
+# Four decimal octets 0-255, no leading zeros.
+is_ipv4() {
+    local IFS=. o
+    case "$1" in ''|*[!0-9.]*|.*|*.|*..*) return 1 ;; esac
+    # shellcheck disable=SC2086
+    set -- $1
+    [ $# -eq 4 ] || return 1
+    for o in "$@"; do
+        case "$o" in 0) ;; 0*) return 1 ;; esac
+        [ ${#o} -le 3 ] && [ "$o" -le 255 ] || return 1
+    done
+}
+
+# Hex groups of up to 4 digits separated by colons: 8 groups, or fewer with one "::".
+is_ipv6() {
+    local IFS=: g groups=0 compressed=0
+    case "$1" in ''|*[!0-9A-Fa-f:]*|*:::*) return 1 ;; esac
+    case "$1" in *:*:*) ;; *) return 1 ;; esac
+    case "$1" in
+        *::*)
+            compressed=1
+            case "${1#*::}" in *::*) return 1 ;; esac
+            ;;
+    esac
+    case "$1" in ::*) ;; :*) return 1 ;; esac
+    case "$1" in *::) ;; *:) return 1 ;; esac
+    # shellcheck disable=SC2086
+    set -- $1
+    for g in "$@"; do
+        [ -z "$g" ] && continue
+        [ ${#g} -le 4 ] || return 1
+        groups=$((groups + 1))
+    done
+    if [ "$compressed" -eq 1 ]; then
+        [ "$groups" -le 7 ]
+    else
+        [ "$groups" -eq 8 ]
+    fi
+}
+
+# An IPv4 or IPv6 address with an optional /prefix (at most 32 or 128).
+valid_whitelist_address() {
+    local addr=$1 prefix="" max
+    case "$1" in
+        */*/*) return 1 ;;
+        */*)
+            addr=${1%/*}
+            prefix=${1#*/}
+            case "$prefix" in ''|*[!0-9]*) return 1 ;; esac
+            [ ${#prefix} -le 3 ] || return 1
+            ;;
+    esac
+    if is_ipv4 "$addr"; then
+        max=32
+    elif is_ipv6 "$addr"; then
+        max=128
+    else
+        return 1
+    fi
+    [ -z "$prefix" ] || [ $((10#$prefix)) -le "$max" ]
+}
+
+# Reads its action and value from the environment (STPANEL_WL_ACTION = show | toggle | mode | add,
+# STPANEL_WL_VALUE), never from its source.
+WHITELIST_JS='
+const fs = require("fs");
+const env = process.env;
+const paint = (code, text) => (env.STPANEL_COLOR === "1" ? "\x1b[" + code + "m" + text + "\x1b[0m" : text);
+const fail = (msg) => { console.error("stpanel: " + msg); process.exit(1); };
+let yaml;
+try {
+    yaml = require(env.STPANEL_YAML);
+} catch (e) {
+    fail("the yaml package was not found in " + env.STPANEL_YAML + " (run npm install in the SillyTavern folder)");
+}
+const p = env.STPANEL_CONFIG;
+let raw;
+try {
+    raw = fs.readFileSync(p, "utf8");
+} catch (e) {
+    fail("cannot read " + p);
+}
+const doc = yaml.parseDocument(raw);
+if (doc.errors && doc.errors.length) fail("config.yaml could not be read as YAML; nothing was changed");
+const save = () => fs.writeFileSync(p, String(doc), "utf8");
+const restartNote = "(Note: Restart SillyTavern for config changes to take effect)";
+const plain = (item) => String(item && typeof item === "object" && "value" in item ? item.value : item);
+
+switch (env.STPANEL_WL_ACTION) {
+case "show": {
+    const list = doc.toJS() || {};
+    console.log(paint("1", "Whitelist Mode:"), list.whitelistMode ? paint("1;32", "ENABLED (Enforcing Allowed IPs)") : paint("1;33", "DISABLED (Open Access)"));
+    console.log(paint("1", "Currently Allowed IPs / Subnets:"));
+    (Array.isArray(list.whitelist) ? list.whitelist : []).forEach((ip, idx) => console.log("  [" + (idx + 1) + "] " + ip));
+    break;
+}
+case "toggle": {
+    const next = !doc.get("whitelistMode");
+    doc.set("whitelistMode", next);
+    save();
+    console.log(paint("1;32", "✓ Whitelist Mode toggled to:"), next ? "ENABLED" : "DISABLED");
+    console.log(restartNote);
+    break;
+}
+case "mode": {
+    const on = env.STPANEL_WL_VALUE === "on";
+    doc.set("whitelistMode", on);
+    save();
+    console.log(paint("1;32", "✓ Whitelist Mode set to:"), on ? "ENABLED" : "DISABLED");
+    console.log(restartNote);
+    break;
+}
+case "add": {
+    const ip = env.STPANEL_WL_VALUE;
+    const wl = doc.get("whitelist");
+    if (wl == null) {
+        doc.set("whitelist", doc.createNode([ip]));
+    } else if (!Array.isArray(wl.items)) {
+        fail("whitelist in config.yaml is not a list; nothing was changed");
+    } else if (wl.items.some((item) => plain(item) === ip)) {
+        console.log(ip + " is already in the whitelist.");
+        break;
+    } else {
+        wl.add(ip);
+    }
+    save();
+    console.log(paint("1;32", "✓ Added " + ip + " to whitelist!"));
+    console.log(restartNote);
+    break;
+}
+default:
+    fail("unknown whitelist action");
+}
+'
+
+# whitelist_node <action> [value]
+whitelist_node() {
+    STPANEL_WL_ACTION="$1" STPANEL_WL_VALUE="$2" STPANEL_COLOR="$USE_COLOR" \
+        STPANEL_YAML="$ST_DIR/node_modules/yaml" STPANEL_CONFIG="$CONFIG_FILE" \
+        node -e "$WHITELIST_JS"
+}
+
+whitelist_add() {
+    if ! valid_whitelist_address "$1"; then
+        echo "stpanel: not an IP address or CIDR subnet (e.g. 192.168.1.20 or 192.168.1.0/24); nothing was changed" >&2
+        return 1
+    fi
+    whitelist_node add "$1"
+}
+
+# The interactive manager: stdin answers 1 (toggle mode) or 2 then an address (add).
 whitelist_manager() {
+    local wl_opt new_ip rc=0
     cls
     find_node || { wait_for_enter; return 1; }
     echo -e "${CLR_BOLD}${CLR_CYAN}=== IP Whitelist Manager (config.yaml) ===${CLR_RESET}\n"
-    node -e '
-const fs = require("fs");
-const yaml = require("'"${ST_DIR}"'/node_modules/yaml");
-const p = "'"$CONFIG_FILE"'";
-const doc = yaml.parse(fs.readFileSync(p, "utf8"));
-console.log("\x1b[1mWhitelist Mode:\x1b[0m", doc.whitelistMode ? "\x1b[1;32mENABLED (Enforcing Allowed IPs)\x1b[0m" : "\x1b[1;33mDISABLED (Open Access)\x1b[0m");
-console.log("\x1b[1mCurrently Allowed IPs / Subnets:\x1b[0m");
-(doc.whitelist || []).forEach((ip, idx) => {
-    console.log(`  [${idx + 1}] ${ip}`);
-});
-'
+    whitelist_node show || { wait_for_enter; return 1; }
     echo ""
     echo -e " ${CLR_CYAN}[1]${CLR_RESET} Toggle Whitelist Mode (ON/OFF)"
     echo -e " ${CLR_CYAN}[2]${CLR_RESET} Add an IP / Subnet to Whitelist"
@@ -917,40 +1119,43 @@ console.log("\x1b[1mCurrently Allowed IPs / Subnets:\x1b[0m");
     read -r wl_opt
     case "$wl_opt" in
         1)
-            node -e '
-const fs = require("fs");
-const yaml = require("'"${ST_DIR}"'/node_modules/yaml");
-const p = "'"$CONFIG_FILE"'";
-const raw = fs.readFileSync(p, "utf8");
-const doc = yaml.parseDocument(raw);
-const cur = doc.get("whitelistMode");
-doc.set("whitelistMode", !cur);
-fs.writeFileSync(p, String(doc), "utf8");
-console.log("\x1b[1;32m✓ Whitelist Mode toggled to:\x1b[0m", !cur ? "ENABLED" : "DISABLED");
-console.log("(Note: Restart SillyTavern for config changes to take effect)");
-'
-            sleep 2
+            whitelist_node toggle
+            rc=$?
             ;;
         2)
-            echo -en "Enter IP address or CIDR subnet to add (e.g. 192.168.1.50): "
+            echo -en "Enter IP address or CIDR subnet to add (e.g. 192.168.1.20): "
             read -r new_ip
-            if [ -n "$new_ip" ]; then
-                node -e '
-const fs = require("fs");
-const yaml = require("'"${ST_DIR}"'/node_modules/yaml");
-const p = "'"$CONFIG_FILE"'";
-const raw = fs.readFileSync(p, "utf8");
-const doc = yaml.parseDocument(raw);
-const wl = doc.get("whitelist");
-wl.add("'"$new_ip"'");
-fs.writeFileSync(p, String(doc), "utf8");
-console.log("\x1b[1;32m✓ Added '"$new_ip"' to whitelist!\x1b[0m");
-console.log("(Note: Restart SillyTavern for config changes to take effect)");
-'
-                sleep 2
-            fi
+            [ -n "$new_ip" ] || return 0
+            whitelist_add "$new_ip"
+            rc=$?
             ;;
         *)
+            return 0
+            ;;
+    esac
+    [ "$IS_SUBCOMMAND" = "1" ] || sleep 2
+    return $rc
+}
+
+# stpanel whitelist [mode on|off | add <address>]
+whitelist_command() {
+    case "$1" in
+        "")
+            whitelist_manager
+            ;;
+        mode)
+            case "$2" in
+                on|off) find_node && whitelist_node mode "$2" ;;
+                *) echo "Usage: stpanel whitelist mode on|off" >&2; return 1 ;;
+            esac
+            ;;
+        add)
+            [ $# -eq 2 ] || { echo "Usage: stpanel whitelist add <address>" >&2; return 1; }
+            find_node && whitelist_add "$2"
+            ;;
+        *)
+            echo "Usage: stpanel whitelist [mode on|off | add <address>]" >&2
+            return 1
             ;;
     esac
 }
@@ -970,7 +1175,7 @@ render_dashboard() {
         CACHED_SYS_DATA=$(get_system_info)
         CACHED_ASSET_DATA=$(get_asset_counts)
         CACHED_GIT_DATA=$(get_git_info)
-        CACHED_WL_MODE=$(grep -E '^whitelistMode:\s*' "$CONFIG_FILE" 2>/dev/null | awk '{print $2}')
+        CACHED_WL_MODE=$(grep -E '^whitelistMode:' "$CONFIG_FILE" 2>/dev/null | awk '{print $2}')
     fi
     TICK_COUNT=$(( TICK_COUNT + 1 ))
 
@@ -1002,6 +1207,11 @@ render_dashboard() {
     # Whitelist & Auth config
     [ "$CACHED_WL_MODE" = "true" ] && wl_mode="${CLR_GREEN}ON${CLR_RESET}" || wl_mode="${CLR_YELLOW}OFF${CLR_RESET}"
 
+    # Values the device doesn't report are left out.
+    local bat_part="" disk_part=""
+    [ -n "$bat_str" ] && bat_part="        ${CLR_GREEN}🔋 BATTERY:${CLR_RESET} ${CLR_WHITE}${bat_str}${CLR_RESET}"
+    [ -n "$disk_info" ] && disk_part=" ${CLR_WHITE}💾 DISK:${CLR_RESET}    ${CLR_WHITE}${disk_info}${CLR_RESET}      "
+
     cls
     echo -e "${CLR_CYAN}╭──────────────────────────────────────────────────────────────────────────╮${CLR_RESET}"
     echo -e "${CLR_CYAN}│${CLR_RESET}                   ${CLR_BOLD}${CLR_WHITE}🎭  SILLYTAVERN CONTROL CENTER  🎭${CLR_RESET}                    ${CLR_CYAN}│${CLR_RESET}"
@@ -1011,9 +1221,9 @@ render_dashboard() {
         local metrics
         metrics=$(ps -p "$pid" -o %cpu=,%mem=,rss=,etime= 2>/dev/null)
         read -r cpu mem rss etime <<< "$metrics"
-        [ -n "$rss" ] && ram_mb="$(( rss / 1024 )) MB" || ram_mb="N/A"
+        case "$rss" in ''|*[!0-9]*) ram_mb="--" ;; *) ram_mb="$(( rss / 1024 )) MB" ;; esac
         [ -z "$cpu" ] && cpu="0.0"
-        [ -z "$etime" ] && etime="N/A"
+        [ -z "$etime" ] && etime="--:--"
 
         # HTTP health check (HEAD request, zero body transfer, follow redirects)
         local http_res
@@ -1031,13 +1241,13 @@ render_dashboard() {
 
         echo -e " ${CLR_GREEN}🟢 STATUS:${CLR_RESET}  ${CLR_BOLD}ONLINE${CLR_RESET} ${CLR_DIM}(PID: ${pid})${CLR_RESET}      ${CLR_MAGENTA}🌿 GIT:${CLR_RESET}    ${CLR_WHITE}${branch}${CLR_RESET} ${CLR_DIM}(${commit})${CLR_RESET}${git_status_badge}"
         echo -e " ${CLR_YELLOW}⚡ UPTIME:${CLR_RESET}  ${CLR_WHITE}${etime}${CLR_RESET}                          ${CLR_RED}❤️ HEALTH:${CLR_RESET} ${health_str}"
-        echo -e " ${CLR_CYAN}💻 CPU:${CLR_RESET}     ${CLR_WHITE}${cpu}%${CLR_RESET}   |   ${CLR_BLUE}🧠 RAM:${CLR_RESET} ${CLR_WHITE}${ram_mb}${CLR_RESET}        ${CLR_GREEN}🔋 BATTERY:${CLR_RESET} ${CLR_WHITE}${bat_str}${CLR_RESET}"
-        echo -e " ${CLR_WHITE}💾 DISK:${CLR_RESET}    ${CLR_WHITE}${disk_info}${CLR_RESET}       ${CLR_GRAY}📁 CACHE:${CLR_RESET}   ${CLR_WHITE}${cache_size}${CLR_RESET}"
+        echo -e " ${CLR_CYAN}💻 CPU:${CLR_RESET}     ${CLR_WHITE}${cpu}%${CLR_RESET}   |   ${CLR_BLUE}🧠 RAM:${CLR_RESET} ${CLR_WHITE}${ram_mb}${CLR_RESET}${bat_part}"
+        echo -e "${disk_part} ${CLR_GRAY}📁 CACHE:${CLR_RESET}   ${CLR_WHITE}${cache_size}${CLR_RESET}"
     else
         echo -e " ${CLR_RED}🔴 STATUS:${CLR_RESET}  ${CLR_BOLD}${CLR_RED}OFFLINE${CLR_RESET}                      ${CLR_MAGENTA}🌿 GIT:${CLR_RESET}    ${CLR_WHITE}${branch}${CLR_RESET} ${CLR_DIM}(${commit})${CLR_RESET}${git_status_badge}"
         echo -e " ${CLR_YELLOW}⚡ UPTIME:${CLR_RESET}  ${CLR_DIM}--:--${CLR_RESET}                          ${CLR_RED}❤️ HEALTH:${CLR_RESET} ${CLR_RED}Offline${CLR_RESET}"
-        echo -e " ${CLR_CYAN}💻 CPU:${CLR_RESET}     ${CLR_DIM}0.0%${CLR_RESET}   |   ${CLR_BLUE}🧠 RAM:${CLR_RESET} ${CLR_DIM}0 MB${CLR_RESET}          ${CLR_GREEN}🔋 BATTERY:${CLR_RESET} ${CLR_WHITE}${bat_str}${CLR_RESET}"
-        echo -e " ${CLR_WHITE}💾 DISK:${CLR_RESET}    ${CLR_WHITE}${disk_info}${CLR_RESET}       ${CLR_GRAY}📁 CACHE:${CLR_RESET}   ${CLR_WHITE}${cache_size}${CLR_RESET}"
+        echo -e " ${CLR_CYAN}💻 CPU:${CLR_RESET}     ${CLR_DIM}0.0%${CLR_RESET}   |   ${CLR_BLUE}🧠 RAM:${CLR_RESET} ${CLR_DIM}0 MB${CLR_RESET}  ${bat_part}"
+        echo -e "${disk_part} ${CLR_GRAY}📁 CACHE:${CLR_RESET}   ${CLR_WHITE}${cache_size}${CLR_RESET}"
     fi
 
     echo -e "${CLR_GRAY}────────────────────────────────────────────────────────────────────────────${CLR_RESET}"
@@ -1099,11 +1309,14 @@ render_panel() {
 print_status_oneshot() {
     local pid net_data port lan_ip ts_ip
     local git_data branch commit commit_msg behind ahead git_status_badge
+    local sys_data bat_str disk_info ram_info sys_line=""
     pid=$(get_sillytavern_pid)
     net_data=$(get_network_info)
     IFS='|' read -r lan_ip ts_ip port <<< "$net_data"
     git_data=$(get_git_info)
     IFS='|' read -r branch commit commit_msg behind ahead <<< "$git_data"
+    sys_data=$(get_system_info)
+    IFS='|' read -r bat_str disk_info ram_info <<< "$sys_data"
 
     if [ -n "$behind" ] && [ "$behind" -gt 0 ] 2>/dev/null; then
         git_status_badge=" ${CLR_YELLOW}${CLR_BOLD}[🔔 Update: +${behind}]${CLR_RESET}"
@@ -1114,15 +1327,24 @@ print_status_oneshot() {
     fi
 
     if [ -n "$pid" ]; then
-        local metrics cpu mem rss etime ram_mb
+        local metrics cpu mem rss etime proc_part=""
         metrics=$(ps -p "$pid" -o %cpu=,%mem=,rss=,etime= 2>/dev/null)
         read -r cpu mem rss etime <<< "$metrics"
-        [ -n "$rss" ] && ram_mb="$(( rss / 1024 )) MB" || ram_mb="N/A"
-        echo -e "SillyTavern: ${CLR_GREEN}ONLINE${CLR_RESET} (PID: $pid) | Port: $port | Uptime: $etime | CPU: ${cpu}% | RAM: $ram_mb | Git: $branch ($commit)${git_status_badge}"
+        # Left out where ps can't report them (busybox ps has no -p).
+        [ -n "$etime" ] && proc_part="$proc_part | Uptime: $etime"
+        [ -n "$cpu" ] && proc_part="$proc_part | CPU: ${cpu}%"
+        case "$rss" in ''|*[!0-9]*) ;; *) proc_part="$proc_part | RAM: $(( rss / 1024 )) MB" ;; esac
+        echo -e "SillyTavern: ${CLR_GREEN}ONLINE${CLR_RESET} (PID: $pid) | Port: ${port}${proc_part} | Git: $branch ($commit)${git_status_badge}"
         echo -e "Access URLs: http://127.0.0.1:${port} $([ -n "$lan_ip" ] && echo "| Wi-Fi: http://${lan_ip}:${port}") $([ -n "$ts_ip" ] && echo "| Tailscale: http://${ts_ip}:${port}")"
     else
         echo -e "SillyTavern: ${CLR_RED}OFFLINE${CLR_RESET} | Port: $port | Git: $branch ($commit)${git_status_badge}"
     fi
+
+    [ -n "$bat_str" ] && sys_line="$sys_line | Battery: $bat_str"
+    [ -n "$disk_info" ] && sys_line="$sys_line | Disk: $disk_info"
+    [ -n "$ram_info" ] && sys_line="$sys_line | Device RAM: $ram_info"
+    [ -n "$sys_line" ] && echo "System: ${sys_line# | }"
+    return 0
 }
 
 print_urls_oneshot() {
@@ -1147,14 +1369,17 @@ print_help() {
     echo "  restart      Restart SillyTavern server"
     echo "  backup       Create a timestamped tar.gz archive of user data"
     echo "  clean        Clean temporary thumbnails and cache files"
-    echo "  whitelist    Open the Whitelist Manager"
+    echo "  whitelist    Open the Whitelist Manager (answers read from stdin)"
+    echo "  whitelist mode on|off     Turn whitelist mode on or off"
+    echo "  whitelist add <address>   Allow an IP address or CIDR subnet"
     echo "  stats        View character message counts and activity"
     echo "  logs         Follow SillyTavern console logs in real time"
     echo "  access       View incoming client connection history"
     echo "  update       Update SillyTavern from git"
     echo ""
     echo "Environment:"
-    echo "  ST_DIR       SillyTavern folder (default: ~/SillyTavern)"
+    echo "  ST_DIR       SillyTavern folder (default: $TERMUX_HOME/SillyTavern"
+    echo "               if it exists, else ~/SillyTavern)"
     echo "  ST_USER      User folder under data/ (default: default-user)"
 }
 
@@ -1182,7 +1407,7 @@ if [ -n "$1" ]; then
         restart) restart_server ;;
         backup) create_backup ;;
         clean) clean_cache ;;
-        whitelist) whitelist_manager ;;
+        whitelist) shift; whitelist_command "$@" ;;
         stats) character_stats_browser ;;
         logs) view_logs ;;
         access) view_access_logs ;;
