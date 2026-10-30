@@ -48,6 +48,9 @@ android {
         }
     }
 
+    // server/stpanel ships as the asset "stpanel" (the built-in copy for servers without one).
+    sourceSets["main"].assets.srcDirs("src/main/assets", "../server")
+
     buildFeatures {
         compose = true
         buildConfig = true

@@ -3,6 +3,7 @@ package dev.halftoast.stmobile.stats
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.halftoast.stmobile.panel.CharacterStat
+import dev.halftoast.stmobile.panel.RemoteCommand
 import dev.halftoast.stmobile.panel.parseStats
 import dev.halftoast.stmobile.ssh.RemoteShell
 import dev.halftoast.stmobile.ssh.SshError
@@ -24,11 +25,11 @@ data class StatsUi(
  * Activity-scoped: the python probe takes a few seconds, and a tab switch must not cancel it halfway
  * (cancelling exec would TERM the remote command).
  *
- * @param command builds the `(command, stdin)` pair; reads the user folder from settings on each call.
+ * @param command builds the command; reads the folders from settings on each call.
  */
 class StatsViewModel(
     private val shell: RemoteShell,
-    private val command: () -> Pair<String, String>,
+    private val command: () -> RemoteCommand,
 ) : ViewModel() {
     private val _ui = MutableStateFlow(StatsUi())
     val ui: StateFlow<StatsUi> = _ui
@@ -40,8 +41,8 @@ class StatsViewModel(
         _ui.update { it.copy(loading = true) }
         job = viewModelScope.launch {
             try {
-                val (cmd, stdin) = command()
-                val r = shell.exec(cmd, stdin)
+                val c = command()
+                val r = shell.exec(c.command, c.stdin)
                 if (r.exitCode != 0) {
                     val first = r.stderr.lineSequence().map { it.trim() }.lastOrNull { it.isNotEmpty() }
                     _ui.update {

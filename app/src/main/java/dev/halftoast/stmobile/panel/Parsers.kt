@@ -66,6 +66,19 @@ fun parseWhitelist(raw: String): WhitelistState {
     )
 }
 
+/** What stpanel's whitelist menu said to an add (option 2). */
+enum class WhitelistAdd { Added, AlreadyListed }
+
+/** Null when stpanel neither added the address nor found it already there (it failed). */
+fun parseWhitelistAdd(raw: String): WhitelistAdd? {
+    val clean = stripAnsi(raw)
+    return when {
+        "Added" in clean -> WhitelistAdd.Added
+        "is already in the whitelist" in clean -> WhitelistAdd.AlreadyListed
+        else -> null
+    }
+}
+
 fun parseBackupResult(raw: String): ActionResult {
     val clean = stripAnsi(raw)
     val size = Regex("""Archive Size:\s*(\S+)""").find(clean)?.groupValues?.get(1)

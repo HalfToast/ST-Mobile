@@ -17,18 +17,24 @@ import java.util.concurrent.TimeUnit
  * The password is used for this single connection only and is never stored or logged.
  */
 object KeyInstaller {
-    /** Reads the key line from stdin, so the key never appears in the command line. Idempotent. */
-    const val INSTALL_SCRIPT: String =
-        "read -r KEY; mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && " +
-            "chmod 600 ~/.ssh/authorized_keys && (grep -qxF \"\$KEY\" ~/.ssh/authorized_keys || " +
-            "printf '%s\\n' \"\$KEY\" >> ~/.ssh/authorized_keys)"
+    /** The script goes on stdin, so any login shell (bash, zsh, fish) runs it the same way. */
+    const val INSTALL_COMMAND: String = "env bash -s"
 
-    val INSTALL_COMMAND: String = "bash -c " + shellQuote(INSTALL_SCRIPT)
+    private val KEY_LINE = Regex("""ecdsa-sha2-nistp256 [A-Za-z0-9+/=]+ st-mobile""")
 
     private const val TIMEOUT_MS = 30_000L
 
-    /** POSIX single-quote quoting. */
-    fun shellQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
+    /**
+     * The script that appends [line] to authorized_keys unless it is already there. Throws
+     * [IllegalArgumentException] unless [line] is the app's own key line (KeyManager), which is
+     * what makes embedding it in single quotes safe.
+     */
+    fun installScript(line: String): String {
+        require(KEY_LINE.matches(line)) { "not the app's key line" }
+        return "KEY='$line'\n" +
+            "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && chmod 600 ~/.ssh/authorized_keys && " +
+            "{ grep -qxF \"\$KEY\" ~/.ssh/authorized_keys || printf '%s\\n' \"\$KEY\" >> ~/.ssh/authorized_keys; }\n"
+    }
 
     /**
      * Installs [line] for [user] and returns the SHA256 host key fingerprint seen. [password] is
@@ -44,9 +50,9 @@ object KeyInstaller {
         knownHostKey: String? = null,
     ): String = withContext(Dispatchers.IO) {
         try {
-            require('\n' !in line && '\r' !in line) { "key line must be a single line" }
+            val script = installScript(line) // before anything connects
             withSshTimeout(TIMEOUT_MS) {
-                runInterruptible { installBlocking(host, port, user, password, line, knownHostKey) }
+                runInterruptible { installBlocking(host, port, user, password, script, knownHostKey) }
             }
         } finally {
             password.fill('\u0000')
@@ -58,7 +64,7 @@ object KeyInstaller {
         port: Int,
         user: String,
         password: CharArray,
-        line: String,
+        script: String,
         knownHostKey: String?,
     ): String {
         val (client, verifier) = SshConnect.open(host, port, knownHostKey)
@@ -77,7 +83,7 @@ object KeyInstaller {
             }
             client.startSession().use { session ->
                 val cmd = session.exec(INSTALL_COMMAND)
-                cmd.outputStream.use { it.write((line + "\n").toByteArray(Charsets.UTF_8)) }
+                cmd.outputStream.use { it.write(script.toByteArray(Charsets.UTF_8)) }
                 val stdout = cmd.inputStream.readBytes().toString(Charsets.UTF_8)
                 val stderr = cmd.errorStream.readBytes().toString(Charsets.UTF_8)
                 cmd.join(10, TimeUnit.SECONDS)

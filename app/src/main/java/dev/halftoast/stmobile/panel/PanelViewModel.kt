@@ -17,17 +17,23 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
-/** The probe commands, as `(command, stdin)` pairs. Over [Probes] in the app; faked in tests. */
+/**
+ * The probe and action commands. Over [Probes] in the app; faked in tests. Each throws
+ * [IllegalArgumentException] if a configured SillyTavern folder is invalid.
+ */
 interface ProbeSource {
-    /** Throws [IllegalArgumentException] if the configured SillyTavern user folder is invalid. */
-    fun dashboard(): Pair<String, String>
-    fun whitelist(): Pair<String, String>
+    fun dashboard(): RemoteCommand
+    fun whitelist(): RemoteCommand
+    /** `stpanel <sub>`, detached, with [input] on its stdin. */
+    fun action(sub: String, input: String?): RemoteCommand
 }
 
-/** Reads the user folder from settings on every call, so a change in Settings applies on the next poll. */
+/** Reads the folders from settings on every call, so a change in Settings applies on the next poll. */
 class AndroidProbeSource(private val context: Context, private val settings: AppSettings) : ProbeSource {
-    override fun dashboard() = Probes.dashboard(context, settings.stUserDir)
-    override fun whitelist() = Probes.whitelist(context)
+    private val stDir = "" // Task 5: settings.stDir
+    override fun dashboard() = Probes.dashboard(context, stDir, settings.stUserDir)
+    override fun whitelist() = Probes.whitelist(context, stDir)
+    override fun action(sub: String, input: String?) = Probes.action(context, sub, stDir, input)
 }
 
 enum class PanelAction(val label: String, val subcommand: String) {
@@ -247,7 +253,11 @@ class PanelViewModel(
             try {
                 // stpanel whitelist menu: 2 = add, then the address. stpanel puts it in a node -e string, hence the check above.
                 execWhitelist("2\n$entry\n") { out ->
-                    if ("Added" in out) ActionResult.Ok("Added $entry to the whitelist") else null
+                    when (parseWhitelistAdd(out)) {
+                        WhitelistAdd.Added -> WhitelistReply(ActionResult.Ok("Added $entry to the whitelist"))
+                        WhitelistAdd.AlreadyListed -> WhitelistReply(ActionResult.Ok("$entry is already in the whitelist"), changed = false)
+                        null -> null
+                    }
                 }
                 loadWhitelistNow(force = true)
             } finally {
@@ -302,7 +312,7 @@ class PanelViewModel(
                         // stpanel whitelist menu: 1 = toggle whitelist mode.
                         execWhitelist("1\n") { out ->
                             Regex("""toggled to:\s*(ENABLED|DISABLED)""").find(out)
-                                ?.let { ActionResult.Ok("Whitelist mode ${if (it.groupValues[1] == "ENABLED") "on" else "off"}") }
+                                ?.let { WhitelistReply(ActionResult.Ok("Whitelist mode ${if (it.groupValues[1] == "ENABLED") "on" else "off"}")) }
                         }
                         loadWhitelistNow(force = true)
                     }
@@ -313,13 +323,17 @@ class PanelViewModel(
         }
     }
 
-    /** Runs `stpanel whitelist` with [stdin]; reports the result and suggests a restart on success. */
-    private suspend fun execWhitelist(stdin: String, interpret: (String) -> ActionResult.Ok?) {
+    /** A whitelist change stpanel reported; [changed] false means config.yaml was left as it was. */
+    private class WhitelistReply(val result: ActionResult.Ok, val changed: Boolean = true)
+
+    /** Runs `stpanel whitelist` with [stdin]; reports the result and suggests a restart if config.yaml changed. */
+    private suspend fun execWhitelist(stdin: String, interpret: (String) -> WhitelistReply?) {
         probeLock.withLock { } // don't start under an in-flight probe
+        var changed = false
         val result = try {
-            val command = Probes.action("whitelist")
-            val r = actions.runDetached { shell.exec(command, stdin, ACTION_TIMEOUT_MS, signalOnCancel = false) }
-            stpanelMissing(r) ?: interpret(stripAnsi(r.stdout)) ?: ActionResult.Failed(
+            val c = probes.action("whitelist", stdin)
+            val r = actions.runDetached { shell.exec(c.command, c.stdin, ACTION_TIMEOUT_MS, signalOnCancel = false) }
+            stpanelMissing(r) ?: interpret(stripAnsi(r.stdout))?.let { changed = it.changed; it.result } ?: ActionResult.Failed(
                 "Whitelist not changed" + (firstLine(r.stderr)?.let { ": $it" } ?: ""),
             )
         } catch (e: CancellationException) {
@@ -333,7 +347,7 @@ class PanelViewModel(
                 lastResult = result,
                 lastAction = result,
                 whitelistMessage = result.message,
-                restartSuggested = it.restartSuggested || result is ActionResult.Ok,
+                restartSuggested = it.restartSuggested || changed,
             )
         }
     }
@@ -345,8 +359,11 @@ class PanelViewModel(
                 probeLock.withLock { } // don't start under an in-flight probe
                 val stdin = if (action == PanelAction.CleanCache) "y\n" else null
                 val timeout = if (action == PanelAction.Update || action == PanelAction.Backup) LONG_TIMEOUT_MS else ACTION_TIMEOUT_MS
-                val command = Probes.action(action.subcommand)
-                actions.start(action) { shell.exec(command, stdin, timeout, signalOnCancel = false) }
+                actions.start(action) {
+                    // Built in here, so an invalid folder setting ends as this action's failure.
+                    val c = probes.action(action.subcommand, stdin)
+                    shell.exec(c.command, c.stdin, timeout, signalOnCancel = false)
+                }
             } catch (e: CancellationException) {
                 _ui.update { it.copy(busy = null) }
                 throw e
@@ -470,8 +487,8 @@ class PanelViewModel(
         return probeLock.withLock {
             if (!force && !_ui.value.probesAllowed) return@withLock null
             try {
-                val (command, script) = probes.dashboard()
-                val r = shell.exec(command, script, PROBE_TIMEOUT_MS)
+                val c = probes.dashboard()
+                val r = shell.exec(c.command, c.stdin, PROBE_TIMEOUT_MS)
                 if (!stripAnsi(r.stdout).lineSequence().any { it.startsWith("online=") }) {
                     val why = firstLine(r.stderr) ?: "exit ${r.exitCode}"
                     _ui.update { it.copy(error = "Couldn't read the server status ($why)", hostKeyChanged = false) }
@@ -500,8 +517,8 @@ class PanelViewModel(
                     _ui.update { it.copy(whitelistError = "Wait for the running action to finish, then retry.") }
                     return@withLock null
                 }
-                val (command, script) = probes.whitelist()
-                val r = shell.exec(command, script, PROBE_TIMEOUT_MS)
+                val c = probes.whitelist()
+                val r = shell.exec(c.command, c.stdin, PROBE_TIMEOUT_MS)
                 if (!stripAnsi(r.stdout).lineSequence().any { it.startsWith("mode=") }) {
                     val why = firstLine(r.stderr) ?: "exit ${r.exitCode}"
                     _ui.update { it.copy(whitelistError = "Couldn't read the whitelist ($why)") }

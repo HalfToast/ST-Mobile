@@ -102,14 +102,21 @@ class ParsersTest {
     }
 
     @Test fun probesRejectBadDir() {
-        try { Probes.build("x.sh", "a'b; rm -rf /", "bash -s") { "s" }; fail() } catch (_: IllegalArgumentException) {}
-        val (cmd, stdin) = Probes.build("x.sh", "default-user", "bash -s") { "script" }
-        assertEquals("ST_USER='default-user' bash -s", cmd); assertEquals("script", stdin)
+        try { Probes.dashboardWith("s", "", "a'b; rm -rf /"); fail() } catch (_: IllegalArgumentException) {}
+        val c = Probes.dashboardWith("script", "", "default-user")
+        assertEquals(RemoteCommand("env ST_USER='default-user' bash -s", "script"), c)
     }
 
     @Test fun actionCommands() {
-        assertEquals(Probes.wrapDetached("stpanel start", marker = "start"), Probes.action("start"))
-        assertEquals("stpanel status", unwrapDetached(Probes.action("status")))
+        assertEquals("stpanel start", unwrapDetached(Probes.actionWith("# stpanel", "start", "", null).stdin!!))
+        assertEquals("y\n", detachedInput(Probes.actionWith("# stpanel", "clean", "", "y\n").stdin!!))
+        assertEquals(null, detachedInput(Probes.actionWith("# stpanel", "status", "", null).stdin!!))
+    }
+
+    @Test fun whitelistAdd() {
+        assertEquals(WhitelistAdd.Added, parseWhitelistAdd("\u001B[1;32m✓ Added 192.168.1.20 to whitelist!\u001B[0m\n(Note: Restart SillyTavern for config changes to take effect)\n"))
+        assertEquals(WhitelistAdd.AlreadyListed, parseWhitelistAdd("192.168.1.20 is already in the whitelist.\n"))
+        assertEquals(null, parseWhitelistAdd("stpanel: not an IP address\n"))
     }
 
     @Test fun statsWithAvatarColumn() {

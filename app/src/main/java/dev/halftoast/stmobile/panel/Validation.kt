@@ -3,7 +3,8 @@ package dev.halftoast.stmobile.panel
 import java.net.InetAddress
 
 private val IPV4 = Regex("""(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}""")
-private val IPV6_CHARS = Regex("""[0-9a-fA-F:.]+""")
+// Hex groups only: stpanel refuses the dotted-quad form (::ffff:192.168.1.20), so the app does too.
+private val IPV6_CHARS = Regex("""[0-9a-fA-F:]+""")
 private val PREFIX = Regex("""\d{1,3}""")
 
 /**

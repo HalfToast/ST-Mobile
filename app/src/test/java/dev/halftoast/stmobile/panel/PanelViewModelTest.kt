@@ -31,8 +31,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
-private const val DASHBOARD_CMD = "ST_USER='default-user' bash -s"
-private const val WHITELIST_CMD = "bash -s # whitelist"
+private const val DASHBOARD_CMD = "env ST_USER='default-user' bash -s"
+private const val WHITELIST_CMD = "env bash -s"
 
 private const val ONLINE = "online=1\npid=9824\netime=01:34:17\nhttp_code=200\nlatency_s=0.004\nbranch=staging\ncommit=ad29cbda6\nbehind=0\n" +
     "last_client=100.101.102.104 (Mozilla/5.0 (Linux; Android 16; K) at 02:59:29 UTC\n"
@@ -44,16 +44,26 @@ private const val WL_ON = "mode=true\nentry=127.0.0.1\n"
 private const val NO_HTTP = "online=1\npid=9824\nhttp_code=000\nlatency_s=0\nbranch=staging\ncommit=ad29cbda6\nbehind=0\n"
 private const val OFFLINE = "online=0\nbranch=staging\ncommit=ad29cbda6\nbehind=0\n"
 
-/** The command inside [Probes.wrapDetached], or [command] itself when it isn't wrapped. */
-fun unwrapDetached(command: String): String =
-    Regex("""\( trap '' HUP; \( (.*)\n\)""").find(command)?.groupValues?.get(1) ?: command
+/**
+ * The command inside a [Probes.wrapDetached] script, shortened to `stpanel <sub>` for an action
+ * ([Probes.actionWith]); null if [script] isn't a wrapper.
+ */
+fun unwrapDetached(script: String): String? =
+    Regex("""\( trap '' HUP; \( (.*)\n\)""").find(script)?.groupValues?.get(1)?.let { cmd ->
+        Regex("""then (stpanel [a-z]+);""").find(cmd)?.groupValues?.get(1) ?: cmd
+    }
+
+/** The input a [Probes.wrapDetached] script gives its command; null if it gives none. */
+fun detachedInput(script: String): String? =
+    Regex("""cat >"\${'$'}d/in" <<'(STM_EOF_\d+)'\n(.*?)\1\n""", RegexOption.DOT_MATCHES_ALL).find(script)?.groupValues?.get(2)
 
 /**
  * Records every exec; answers dashboard/whitelist probes and stpanel subcommands with canned output.
- * [commands] holds actions unwrapped; [rawCommands] holds what was actually sent.
+ * [commands] holds actions unwrapped (`stpanel start`), with their input in [stdinFor]; [rawCommands]
+ * holds what was actually sent.
  */
 class FakeRemoteShell : RemoteShell {
-    val rawCommands = mutableListOf<String>()
+    val rawCommands = mutableListOf<RemoteCommand>()
     val commands = mutableListOf<String>()
     /** Commands that ran to the end (their delay elapsed without cancellation). */
     val completed = mutableListOf<String>()
@@ -69,6 +79,10 @@ class FakeRemoteShell : RemoteShell {
     var dashboards = mutableListOf(ONLINE)
     var whitelists = mutableListOf(WL_OFF)
     var updateOutput = "Updating ad29cbda6..1234567890ab\nFast-forward\n"
+    /** What `stpanel whitelist` answers to an add. */
+    var whitelistAddOutput: (String) -> String = { ip ->
+        "✓ Added $ip to whitelist!\n(Note: Restart SillyTavern for config changes to take effect)\n"
+    }
     private var failure: Exception? = null
     /** Thrown by `stpanel` commands only, so probes keep answering. */
     var actionFailure: Exception? = null
@@ -78,11 +92,13 @@ class FakeRemoteShell : RemoteShell {
     fun timeoutFor(prefix: String): Long? = calls.firstOrNull { it.first.contains(prefix) }?.third
 
     override suspend fun exec(command: String, stdin: String?, timeoutMs: Long, signalOnCancel: Boolean): ExecResult {
-        rawCommands += command
-        val cmd = unwrapDetached(command)
+        rawCommands += RemoteCommand(command, stdin)
+        val action = stdin?.let { unwrapDetached(it) }
+        val cmd = action ?: command
+        val input = if (action != null) detachedInput(stdin) else stdin
         commands += cmd
         signals += cmd to signalOnCancel
-        calls += Triple(cmd, stdin, timeoutMs)
+        calls += Triple(cmd, input, timeoutMs)
         if (cmd == DASHBOARD_CMD) dashboardCalls++
         if (delayMs > 0) delay(delayMs)
         if (actionDelayMs > 0 && cmd.startsWith("stpanel")) delay(actionDelayMs)
@@ -95,9 +111,8 @@ class FakeRemoteShell : RemoteShell {
             cmd == "stpanel update" -> updateOutput
             cmd == "stpanel backup" -> "✓ Backup successfully created!\n  Archive Size: 12M\n"
             cmd == "stpanel clean" -> "✓ Cache successfully cleared!\n"
-            cmd == "stpanel whitelist" && stdin?.startsWith("2\n") == true ->
-                "✓ Added ${stdin.lines()[1]} to whitelist!\n(Note: Restart SillyTavern for config changes to take effect)\n"
-            cmd == "stpanel whitelist" && stdin == "1\n" ->
+            cmd == "stpanel whitelist" && input?.startsWith("2\n") == true -> whitelistAddOutput(input.lines()[1])
+            cmd == "stpanel whitelist" && input == "1\n" ->
                 "✓ Whitelist Mode toggled to: ENABLED\n(Note: Restart SillyTavern for config changes to take effect)\n"
             else -> ""
         }
@@ -110,16 +125,17 @@ class FakeRemoteShell : RemoteShell {
         return out
     }
 
-    override fun stream(command: String): Flow<String> = emptyFlow()
+    override fun stream(command: String, stdin: String?): Flow<String> = emptyFlow()
 }
 
 class FakeProbes : ProbeSource {
     var invalidUserDir = false
-    override fun dashboard(): Pair<String, String> {
+    override fun dashboard(): RemoteCommand {
         require(!invalidUserDir) { "Invalid SillyTavern user folder" }
-        return DASHBOARD_CMD to "# dashboard.sh"
+        return RemoteCommand(DASHBOARD_CMD, "# dashboard.sh")
     }
-    override fun whitelist(): Pair<String, String> = WHITELIST_CMD to "# whitelist.sh"
+    override fun whitelist(): RemoteCommand = RemoteCommand(WHITELIST_CMD, "# whitelist.sh")
+    override fun action(sub: String, input: String?): RemoteCommand = Probes.actionWith("# stpanel", sub, "", input)
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -154,12 +170,19 @@ class PanelViewModelTest {
     @Test fun actionsAndWhitelistRunDetached() = runTest {
         vm.request(PanelAction.Start); advanceUntilIdle()
         vm.addWhitelistEntry("192.168.1.50"); advanceUntilIdle()
-        assertTrue(Probes.wrapDetached("stpanel start", marker = "start") in shell.rawCommands)
-        assertTrue(Probes.wrapDetached("stpanel whitelist", marker = "whitelist") in shell.rawCommands)
+        assertTrue(probes.action("start", null) in shell.rawCommands)
+        assertTrue(probes.action("whitelist", "2\n192.168.1.50\n") in shell.rawCommands)
     }
     @Test fun startRunsWithoutConfirm() = runTest { vm.request(PanelAction.Start); advanceUntilIdle(); assertTrue(shell.commands.any { it.contains("stpanel start") }) }
     @Test fun cleanFeedsYes() = runTest { vm.request(PanelAction.CleanCache); vm.confirm(); advanceUntilIdle(); assertEquals("y\n", shell.stdinFor("stpanel clean")) }
     @Test fun whitelistAddFeedsChoiceAndIp() = runTest { vm.addWhitelistEntry("192.168.1.50"); advanceUntilIdle(); assertEquals("2\n192.168.1.50\n", shell.stdinFor("stpanel whitelist")); assertTrue(vm.ui.value.restartSuggested) }
+    @Test fun whitelistAddOfAListedAddressSaysSo() = runTest {
+        shell.whitelistAddOutput = { ip -> "$ip is already in the whitelist.\n" }
+        vm.addWhitelistEntry("127.0.0.1"); advanceUntilIdle()
+        assertEquals(ActionResult.Ok("127.0.0.1 is already in the whitelist"), vm.ui.value.lastAction)
+        assertEquals("127.0.0.1 is already in the whitelist", vm.ui.value.whitelistMessage)
+        assertFalse("nothing changed, so no restart", vm.ui.value.restartSuggested)
+    }
     @Test fun whitelistRejectsBadIpWithoutRunning() = runTest { vm.addWhitelistEntry("1.2.3.4\"); x"); advanceUntilIdle(); assertTrue(shell.commands.none { it.contains("whitelist") && it.contains("stpanel") }); assertNotNull(vm.ui.value.error) }
     @Test fun updateSuggestsRestartButNeverReloadsChat() = runTest {
         // Ruling 27: a working chat is never reloaded by Update; the suggested Restart does that.

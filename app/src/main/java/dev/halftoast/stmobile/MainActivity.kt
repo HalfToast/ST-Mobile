@@ -145,7 +145,7 @@ class MainActivity : ComponentActivity() {
         val app = application as StMobileApp
         viewModelFactory {
             initializer {
-                StatsViewModel(app.remoteShell) { Probes.stats(app, app.settings.stUserDir) }
+                StatsViewModel(app.remoteShell) { Probes.stats(app, "", app.settings.stUserDir) } // Task 5: settings.stDir
             }
         }
     }

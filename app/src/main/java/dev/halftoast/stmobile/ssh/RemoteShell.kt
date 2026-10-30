@@ -14,7 +14,8 @@ interface RemoteShell {
         timeoutMs: Long = 60_000,
         signalOnCancel: Boolean = true,
     ): ExecResult
-    fun stream(command: String): Flow<String>
+    /** Runs [command] with [stdin] (then end of input) and emits its stdout lines until it ends or the collector stops. */
+    fun stream(command: String, stdin: String? = null): Flow<String>
 }
 
 data class ExecResult(val exitCode: Int?, val stdout: String, val stderr: String)

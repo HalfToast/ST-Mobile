@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import dev.halftoast.stmobile.panel.LogKind
 import dev.halftoast.stmobile.panel.Probes
 import dev.halftoast.stmobile.panel.stripAnsi
 import dev.halftoast.stmobile.ssh.RemoteShell
@@ -49,10 +50,13 @@ import kotlinx.coroutines.flow.drop
 
 private const val MAX_LINES = 1000
 
-private enum class LogKind(val label: String, val command: String) {
-    Server("Server", Probes.TAIL_SERVER_LOG),
-    Access("Access", Probes.TAIL_ACCESS_LOG),
-}
+private val LogKind.label: String
+    get() = when (this) {
+        LogKind.Server -> "Server"
+        LogKind.Access -> "Access"
+    }
+
+private const val ST_DIR = "" // Task 5: settings.stDir
 
 /** One shown line: [id] keeps rows stable while old lines drop off the top; [tone] is worked out once. */
 private class LogLine(val id: Long, val text: String, val tone: LogTone)
@@ -83,7 +87,8 @@ fun LogsScreen(shell: RemoteShell, onOpenSettings: () -> Unit, modifier: Modifie
             error = null
             hostKeyChanged = false
             try {
-                shell.stream(kind.command).collect { raw ->
+                val tail = Probes.tail(kind, ST_DIR)
+                shell.stream(tail.command, tail.stdin).collect { raw ->
                     val line = stripAnsi(raw).trimEnd('\r')
                     lines = appendCapped(lines, LogLine(nextId++, line, logTone(line)))
                 }

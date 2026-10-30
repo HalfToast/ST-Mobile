@@ -98,20 +98,22 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
      * waiting for its reply) and the session is closed. Termux sshd keeps a non-PTY command running
      * after a plain channel close, so the signal is what stops e.g. `tail -f`.
      */
-    override fun stream(command: String): Flow<String> = channelFlow {
+    override fun stream(command: String, stdin: String?): Flow<String> = channelFlow {
         idle.begin()
         try {
-            streamLines(command)
+            streamLines(command, stdin)
         } finally {
             idle.end()
         }
     }.flowOn(Dispatchers.IO)
 
-    private suspend fun kotlinx.coroutines.channels.ProducerScope<String>.streamLines(command: String) {
+    private suspend fun kotlinx.coroutines.channels.ProducerScope<String>.streamLines(command: String, stdin: String?) {
         val (client, session) = openSession()
         try {
             val c = runInterruptible { session.exec(command) }
-            c.outputStream.close()
+            runInterruptible {
+                c.outputStream.use { out -> stdin?.let { out.write(it.toByteArray(Charsets.UTF_8)); out.flush() } }
+            }
             launch { runCatching { runInterruptible { drain(c.errorStream) } } } // keep the window open
             val reader = c.inputStream.bufferedReader(Charsets.UTF_8)
             while (true) {

@@ -1,32 +1,84 @@
 package dev.halftoast.stmobile.ssh
 
 import kotlinx.coroutines.test.runTest
+import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Before
 import org.junit.Test
+import java.io.File
 import java.net.ServerSocket
+import java.nio.file.Files
+import java.util.concurrent.TimeUnit
 
 class KeyInstallerTest {
-    @Test fun scriptReadsKeyFromStdinAndIsIdempotent() {
-        val s = KeyInstaller.INSTALL_SCRIPT
-        assertTrue(s.contains("read -r KEY"))
-        assertTrue(s.contains("grep -qxF \"\$KEY\""))
-        assertTrue(s.contains("chmod 600"))
-        assertFalse(s.contains("ecdsa-sha2"))
+    private val key = "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTY= st-mobile"
+    private lateinit var home: File
+
+    @Before fun setUp() {
+        home = Files.createTempDirectory("home").toFile()
     }
 
-    @Test fun scriptIsVerbatim() = assertEquals(
-        "read -r KEY; mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && " +
-            "chmod 600 ~/.ssh/authorized_keys && (grep -qxF \"\$KEY\" ~/.ssh/authorized_keys || " +
-            "printf '%s\\n' \"\$KEY\" >> ~/.ssh/authorized_keys)",
-        KeyInstaller.INSTALL_SCRIPT,
-    )
+    @After fun tearDown() {
+        home.deleteRecursively()
+    }
 
-    @Test fun commandRunsScriptUnderBashWithSafeQuoting() {
-        assertEquals("'a'\\''b'", KeyInstaller.shellQuote("a'b"))
-        assertEquals("bash -c " + KeyInstaller.shellQuote(KeyInstaller.INSTALL_SCRIPT), KeyInstaller.INSTALL_COMMAND)
+    /** Runs the install script the way the app does: [KeyInstaller.INSTALL_COMMAND] with the script on stdin. */
+    private fun install(script: String) {
+        val p = ProcessBuilder("sh", "-c", KeyInstaller.INSTALL_COMMAND).apply {
+            environment()["HOME"] = home.path
+            redirectErrorStream(true)
+        }.start()
+        p.outputStream.use { it.write(script.toByteArray()) }
+        val out = p.inputStream.bufferedReader().readText()
+        assertTrue(p.waitFor(10, TimeUnit.SECONDS))
+        assertEquals(out, 0, p.exitValue())
+    }
+
+    @Test fun commandIsBashReadingStdin() = assertEquals("env bash -s", KeyInstaller.INSTALL_COMMAND)
+
+    @Test fun appendsTheKeyOnce() {
+        val keys = File(home, ".ssh/authorized_keys")
+        File(home, ".ssh").mkdirs()
+        keys.writeText("ssh-ed25519 AAAAother other@host\n")
+        install(KeyInstaller.installScript(key))
+        install(KeyInstaller.installScript(key))
+        assertEquals("ssh-ed25519 AAAAother other@host\n$key\n", keys.readText())
+    }
+
+    @Test fun createsTheSshFolder() {
+        install(KeyInstaller.installScript(key))
+        assertEquals("$key\n", File(home, ".ssh/authorized_keys").readText())
+    }
+
+    @Test fun rejectsAnythingButTheAppsKeyLine() {
+        listOf(
+            "",
+            "ssh-rsa AAAA st-mobile",
+            "ecdsa-sha2-nistp256 AAAA other",
+            "ecdsa-sha2-nistp256 AA'AA st-mobile",
+            "ecdsa-sha2-nistp256 AAAA st-mobile\nrm -rf ~",
+            "ecdsa-sha2-nistp256 AAAA st-mobile ",
+        ).forEach { bad ->
+            try {
+                KeyInstaller.installScript(bad)
+                fail("accepted $bad")
+            } catch (_: IllegalArgumentException) {
+            }
+        }
+    }
+
+    @Test fun badKeyIsRejectedBeforeConnecting() = runTest {
+        // Nothing listens on this port: connecting would fail with Unreachable instead.
+        val port = ServerSocket(0).use { it.localPort }
+        val password = "hunter2".toCharArray()
+        try {
+            KeyInstaller.install("127.0.0.1", port, "nobody", password, "ecdsa-sha2-nistp256 AA'AA st-mobile")
+            fail("expected IllegalArgumentException")
+        } catch (_: IllegalArgumentException) {
+        }
+        assertTrue(password.all { it == '\u0000' })
     }
 
     @Test fun unreachableHostMapsToUnreachableAndZeroesPassword() = runTest {
