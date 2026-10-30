@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Smoke tests for server/stpanel on Linux, in Docker containers:
+# Smoke tests for server/stpanel and the app's probe scripts (app/src/main/assets/probes) on Linux,
+# in Docker containers:
 #   debian:stable-slim (GNU userland, procps) and alpine (busybox userland, with bash).
 #
 #   tools/test-stpanel-linux.sh            run every image
@@ -7,9 +8,9 @@
 #
 # The repo is mounted read-only. A fake node (argv[0] "node", idles until TERM) stands in for
 # SillyTavern; the whitelist checks use the container's real node with a yaml package mounted
-# from the host (~/Developer/*/node_modules/yaml or app/build/test-node/node_modules/yaml) and
-# are skipped, with a SKIP line, when either is missing. Prints PASS/FAIL per check and exits
-# non-zero if any check fails.
+# 2.x from the host (~/Developer/*/node_modules/yaml or app/build/test-node/node_modules/yaml) and
+# are skipped, with a SKIP line, when either is missing. Prints PASS/FAIL/SKIP per check and exits
+# non-zero if any check fails or a container can't be set up.
 
 if [ "$1" != "--inside" ]; then
     repo=$(cd "$(dirname "$0")/.." && pwd)
@@ -17,7 +18,8 @@ if [ "$1" != "--inside" ]; then
     [ ${#images[@]} -gt 0 ] || images=(debian:stable-slim alpine:latest)
     yaml=""
     for d in "$HOME"/Developer/*/node_modules/yaml "$repo/app/build/test-node/node_modules/yaml"; do
-        [ -f "$d/package.json" ] && { yaml=$(cd "$d" && pwd -P); break; }
+        # yaml 2.x (SillyTavern's; stpanel uses its parseDocument API)
+        grep -Eq '"version"[[:space:]]*:[[:space:]]*"2\.' "$d/package.json" 2>/dev/null && { yaml=$(cd "$d" && pwd -P); break; }
     done
     status=0
     for image in "${images[@]}"; do
@@ -32,7 +34,7 @@ if [ "$1" != "--inside" ]; then
         mounts=(-v "$repo:/repo:ro")
         [ -n "$yaml" ] && mounts+=(-v "$yaml:/yaml:ro")
         echo "=== $image ==="
-        if ! docker run --rm --init "${mounts[@]}" "$image" sh -c "$setup || echo 'setup failed' >&2; exec bash /repo/tools/test-stpanel-linux.sh --inside"; then
+        if ! docker run --rm --init "${mounts[@]}" "$image" sh -c "$setup || { echo 'FAIL  container setup' >&2; exit 3; }; exec bash /repo/tools/test-stpanel-linux.sh --inside"; then
             status=1
         fi
         echo ""
@@ -43,6 +45,7 @@ fi
 
 # ---------------------------------------------------------------- inside the container
 STPANEL=/repo/server/stpanel
+PROBES=/repo/app/src/main/assets/probes
 W=/tmp/w
 ST="$W/My Apps/SillyTavern"
 OTHER="$W/Other/SillyTavern"
@@ -74,7 +77,9 @@ cat > "$FAKEBIN/node" <<'EOF'
 case "$*" in *server.js*) ;; *) exit 0 ;; esac
 for a in "$@"; do last=$a; done
 for a in "$@"; do printf '%s\n' "$a"; done > "$(dirname "$last")/node.args"
-exec -a node /bin/bash -c 'trap "kill \$s 2>/dev/null; exit 0" TERM INT; while :; do sleep 1 & s=$!; wait $s; done' node "$@"
+${NODE_START_DELAY:+sleep "$NODE_START_DELAY"}
+# Its own path (under $W) stays in its args, so the final pkill -f "$W" finds it.
+exec -a node /bin/bash -c 'trap "kill \$s 2>/dev/null; exit 0" TERM INT; while :; do sleep 1 & s=$!; wait $s; done' "$0" "$@"
 EOF
 chmod +x "$FAKEBIN/node"
 make_tree "$ST"
@@ -134,6 +139,8 @@ fi
 if [ -x /sbin/ifconfig ]; then
     out=$(env -i PATH="$FAKEBIN:/usr/bin:/bin" HOME="$W" ST_DIR="$ST" bash "$STPANEL" urls)
     check "urls falls back to ifconfig without ip on PATH" grep -Eq "Local Wi-Fi: +http://[0-9.]+:8123" <<< "$out"
+else
+    skip "urls falls back to ifconfig without ip on PATH" "no /sbin/ifconfig"
 fi
 out=$(st stop); rc=$?
 check "stop exits 0" [ "$rc" -eq 0 ]
@@ -161,6 +168,27 @@ check "status finds a server by its working folder" grep -q "PID: $byhand" <<< "
 st stop >/dev/null
 sleep 0.2
 check "stop ends it" eval '! alive "$byhand"'
+
+# ---- startst's supervisor loop, its server still starting (not yet node) when stop runs
+loop='trap "" HUP
+cd "$ST_DIR" || exit 1
+while [ ! -f .stop_requested ]; do
+    node --max-old-space-size=2048 server.js >> sillytavern.log 2>&1 &
+    echo $! > sillytavern.pid
+    wait $!
+    if [ -f .stop_requested ]; then rm -f .stop_requested sillytavern.pid; break; fi
+    echo "Watchdog reviving in 2 seconds..." >> sillytavern.log
+    sleep 2
+done'
+rm -f "$ST/sillytavern.pid"
+(env NODE_START_DELAY=1 PATH="$FAKEBIN:/usr/bin:/bin" bash -c "ST_DIR=\"$ST\"; $loop") >/dev/null 2>&1 &
+sup=$!
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -s "$ST/sillytavern.pid" ] && break; sleep 0.1; done
+starting=$(tr -dc '0-9' < "$ST/sillytavern.pid" 2>/dev/null)
+st stop >/dev/null
+sleep 1.5
+check "stop ends a server its supervisor is still starting" eval '[ -n "$starting" ] && ! alive "$starting"'
+check "stop ends startst's supervisor loop" eval '! alive "$sup"'
 
 # ---- other folders and processes that only mention node are left alone
 (cd "$OTHER" && exec "$FAKEBIN/node" --max-old-space-size=2048 server.js) >/dev/null 2>&1 &
@@ -221,6 +249,51 @@ else
     skip "stats" "no python3"
 fi
 
+# ---- the app's probe scripts, run as the app does: `env ST_DIR='~/…' ST_USER=… bash -s` (python3 -)
+probe() { # probe <interpreter> <script> [VAR=value ...]
+    local interp=$1 script=$2
+    shift 2
+    # shellcheck disable=SC2086
+    env -i PATH="/usr/local/bin:/usr/bin:/bin" HOME="$W" TMPDIR="$W/tmp" "$@" $interp < "$PROBES/$script"
+}
+mkdir -p "$W/tmp"
+ls_count=$(ls "$ST/data/default-user/characters" | wc -l | tr -d ' ')
+out=$(probe "bash -s" dashboard.sh ST_DIR="~/My Apps/SillyTavern" ST_USER=default-user 2>&1)
+check "dashboard: offline in a folder with a space" grep -qx "online=0" <<< "$out"
+check "dashboard: counts that folder's characters" grep -qx "chars=$ls_count" <<< "$out"
+check "dashboard: disk_free" grep -Eq "^disk_free=." <<< "$out"
+if ls /sys/class/power_supply/*/capacity >/dev/null 2>&1; then
+    check "dashboard: battery level" grep -Eq "^bat_level=[0-9]+$" <<< "$out"
+else
+    check "dashboard: no battery line without a battery" eval '! grep -q "^bat_" <<< "$out"'
+fi
+check "dashboard: KEY=VALUE lines only" eval '! grep -Ev "^[a-z_]+=" <<< "$out" | grep -q .'
+(cd "$ST" && exec "$FAKEBIN/node" --max-old-space-size=2048 server.js) >/dev/null 2>&1 &
+byhand=$!
+(cd "$OTHER" && exec "$FAKEBIN/node" --max-old-space-size=2048 server.js) >/dev/null 2>&1 &
+other1=$!
+sleep 0.5
+out=$(probe "bash -s" dashboard.sh ST_DIR="~/My Apps/SillyTavern" ST_USER=default-user 2>&1)
+check "dashboard: online with the folder's server" grep -qx "online=1" <<< "$out"
+check "dashboard: its pid" grep -qx "pid=$byhand" <<< "$out"
+if [ -n "$(ps -p 1 -o etime= 2>/dev/null)" ]; then
+    check "dashboard: its uptime" grep -Eq "^etime=.+" <<< "$out"
+else
+    skip "dashboard: its uptime" "ps has no -p"
+fi
+kill "$byhand" 2>/dev/null
+sleep 0.3
+out=$(probe "bash -s" dashboard.sh ST_DIR="~/My Apps/SillyTavern" ST_USER=default-user 2>&1)
+check "dashboard: another folder's server is not this one" grep -qx "online=0" <<< "$out"
+kill "$other1" 2>/dev/null
+if command -v python3 >/dev/null 2>&1; then
+    out=$(probe "python3 -" stats.py ST_DIR="~/My Apps/SillyTavern" ST_USER=default-user); rc=$?
+    check "stats.py exits 0" [ "$rc" -eq 0 ]
+    check "stats.py lists the character" grep -q "^Seraphina	" <<< "$out"
+else
+    skip "stats.py" "no python3"
+fi
+
 # ---- whitelist (the container's real node)
 real_node=""
 for d in /usr/bin/node /usr/local/bin/node; do [ -x "$d" ] && { real_node=$d; break; }; done
@@ -250,6 +323,10 @@ else
     check "whitelist add takes CIDR and IPv6" eval 'grep -q -- "- 10.0.0.0/8" "$ST/config.yaml" && grep -q "fd00::1" "$ST/config.yaml"'
     wl add 256.1.1.1 >/dev/null 2>&1
     check "whitelist add rejects 256.1.1.1" [ $? -ne 0 ]
+    printf '%s\n' "$cfg" > "$ST/config.yaml"
+    out=$(probe "bash -s" whitelist.sh ST_DIR="~/My Apps/SillyTavern" 2>&1); rc=$?
+    check "whitelist.sh reads the mode and entries in a folder with a space" \
+        eval '[ "$rc" -eq 0 ] && [ "$out" = "$(printf "mode=true\nentry=127.0.0.1")" ]'
 fi
 
 pkill -f "$W" 2>/dev/null
