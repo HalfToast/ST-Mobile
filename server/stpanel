@@ -15,6 +15,7 @@
 #   STPANEL_NODE_DIRS  colon-separated folders searched for node after PATH,
 #             nvm, fnm and Volta. Default: /opt/homebrew/bin:/usr/local/bin and
 #             the Termux bin folder. Set it empty to search none of them.
+#   STPANEL_REFRESH  seconds between panel refreshes (default 5).
 #
 # Files (shared with the startst/stopst scripts this replaces, so either can stop
 # what the other started): <ST_DIR>/sillytavern.pid, <ST_DIR>/.stop_requested,
@@ -80,6 +81,7 @@ fi
 
 # Auto-refresh control (default 5s, 0 = paused)
 REFRESH_INTERVAL=5
+case "$STPANEL_REFRESH" in ''|*[!0-9]*|0) ;; *) REFRESH_INTERVAL=$STPANEL_REFRESH ;; esac
 PAUSED=0
 TICK_COUNT=0
 CACHED_NET_DATA=""
@@ -161,18 +163,21 @@ find_node() {
         found_node && return 0
     fi
 
+    local searched="PATH, nvm, fnm, Volta"
     old_ifs=$IFS
     IFS=:
     for d in ${STPANEL_NODE_DIRS-/opt/homebrew/bin:/usr/local/bin:$TERMUX_BIN}; do
         IFS=$old_ifs
-        if [ -n "$d" ] && [ -x "$d/node" ]; then
+        [ -n "$d" ] || continue
+        searched="$searched, $d"
+        if [ -x "$d/node" ]; then
             PATH="$d:$PATH"
             found_node && return 0
         fi
     done
     IFS=$old_ifs
 
-    echo "stpanel: node not found (looked in PATH, nvm, fnm, Volta, /opt/homebrew/bin, /usr/local/bin); install Node.js or add it to PATH" >&2
+    echo "stpanel: node not found (looked in $searched); install Node.js or add it to PATH" >&2
     return 1
 }
 
@@ -265,11 +270,8 @@ pidfile_pid() {
     [ -n "$p" ] || return 0
     pid_alive "$p" || return 0
     # A recycled pid now belonging to something else is not the server.
-    case "$(proc_args "$p")" in
-        "") echo "$p" ;;
-        *"$WATCHDOG_TEXT"*) ;;
-        *server.js*) echo "$p" ;;
-    esac
+    is_st_server "$p" && echo "$p"
+    return 0
 }
 
 # Every server process of this folder, one pid per line: the pid file's first.
@@ -1197,6 +1199,7 @@ require_st_dir || exit 1
 while true; do
     render_panel
 
+    read_start=$SECONDS
     if [ "$PAUSED" -eq 1 ]; then
         echo -en " Select option ${CLR_CYAN}[1-9, 0, p, r, q]${CLR_RESET} ${CLR_YELLOW}[REFRESH PAUSED]${CLR_RESET}: "
         read -r -n 1 key
@@ -1206,9 +1209,16 @@ while true; do
     fi
     rc=$?
     echo ""
-    # End of input (not a timeout): nothing more will be typed.
-    if [ "$rc" -ne 0 ] && [ "$rc" -le 128 ]; then
-        exit 0
+    # End of input: nothing more will be typed. bash 3.2 returns 1 for both a
+    # timeout and end of input, so a failed timed read counts as end of input
+    # only when it came back before the refresh interval was up.
+    if [ "$rc" -ne 0 ]; then
+        if [ "$PAUSED" -eq 1 ]; then
+            exit 0
+        elif [ "$rc" -le 128 ] && [ $(( SECONDS - read_start )) -lt "$REFRESH_INTERVAL" ]; then
+            exit 0
+        fi
+        key=""
     fi
 
     case "$key" in

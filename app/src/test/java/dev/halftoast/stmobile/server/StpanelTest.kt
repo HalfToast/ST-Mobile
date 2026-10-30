@@ -290,6 +290,27 @@ class StpanelTest {
         }
     }
 
+    @Test fun panelKeepsRefreshingUntilInputEnds() {
+        val pb = ProcessBuilder("/bin/bash", script.path).redirectErrorStream(true)
+        pb.environment().apply {
+            clear()
+            put("PATH", "${bin.path}:/usr/bin:/bin")
+            put("HOME", home.path)
+            put("ST_DIR", stDir.path)
+            put("STPANEL_REFRESH", "1")
+        }
+        val p = pb.start()
+        started += p
+        val out = CompletableFuture.supplyAsync { p.inputStream.bufferedReader().readText() }
+        // Several 1 s refresh timeouts pass with stdin still open.
+        assertFalse("panel exited on a refresh timeout", p.waitFor(3_500, TimeUnit.MILLISECONDS))
+        p.outputStream.close()
+        assertTrue("panel did not exit at end of input", p.waitFor(10, TimeUnit.SECONDS))
+        assertEquals(0, p.exitValue())
+        val shown = out.get(5, TimeUnit.SECONDS)
+        assertTrue(Regex("CONTROL CENTER").findAll(shown).count() >= 3)
+    }
+
     @Test fun statusOfflineThenOnline() {
         val before = run("status")
         assertEquals(before.err, 0, before.code)
