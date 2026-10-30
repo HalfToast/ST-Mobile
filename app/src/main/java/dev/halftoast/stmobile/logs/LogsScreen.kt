@@ -18,6 +18,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -53,8 +54,11 @@ private enum class LogKind(val label: String, val command: String) {
     Access("Access", Probes.TAIL_ACCESS_LOG),
 }
 
+/** One shown line: [id] keeps rows stable while old lines drop off the top; [tone] is worked out once. */
+private class LogLine(val id: Long, val text: String, val tone: LogTone)
+
 /** Appends [line], keeping only the newest [max] lines. */
-internal fun appendCapped(lines: List<String>, line: String, max: Int = MAX_LINES): List<String> =
+internal fun <T> appendCapped(lines: List<T>, line: T, max: Int = MAX_LINES): List<T> =
     if (lines.size >= max) lines.subList(lines.size - max + 1, lines.size) + line else lines + line
 
 /**
@@ -65,7 +69,8 @@ internal fun appendCapped(lines: List<String>, line: String, max: Int = MAX_LINE
 @Composable
 fun LogsScreen(shell: RemoteShell, onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
     var kind by rememberSaveable { mutableStateOf(LogKind.Server) }
-    var lines by remember { mutableStateOf(emptyList<String>()) }
+    var lines by remember { mutableStateOf(emptyList<LogLine>()) }
+    var nextId by remember { mutableLongStateOf(0L) }
     var error by remember { mutableStateOf<String?>(null) }
     var hostKeyChanged by remember { mutableStateOf(false) }
     var attempt by remember { mutableIntStateOf(0) }
@@ -80,7 +85,7 @@ fun LogsScreen(shell: RemoteShell, onOpenSettings: () -> Unit, modifier: Modifie
             try {
                 shell.stream(kind.command).collect { raw ->
                     val line = stripAnsi(raw).trimEnd('\r')
-                    lines = appendCapped(lines, line)
+                    lines = appendCapped(lines, LogLine(nextId++, line, logTone(line)))
                 }
                 error = "The log stream ended."
             } catch (e: CancellationException) {
@@ -128,7 +133,7 @@ fun LogsScreen(shell: RemoteShell, onOpenSettings: () -> Unit, modifier: Modifie
 }
 
 @Composable
-private fun LogList(lines: List<String>, modifier: Modifier) {
+private fun LogList(lines: List<LogLine>, modifier: Modifier) {
     val listState = rememberLazyListState()
     val hScroll = rememberScrollState()
     // Follow the tail while the last item is visible; once the user scrolls up, stop following.
@@ -145,7 +150,7 @@ private fun LogList(lines: List<String>, modifier: Modifier) {
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }.drop(1).collect { scrolling -> if (!scrolling) follow = atBottom }
     }
-    LaunchedEffect(lines.size, lines.lastOrNull()) {
+    LaunchedEffect(lines.lastOrNull()?.id) {
         if (follow && lines.isNotEmpty()) listState.scrollToItem(lines.lastIndex)
     }
     if (lines.isEmpty()) {
@@ -155,14 +160,14 @@ private fun LogList(lines: List<String>, modifier: Modifier) {
     val p = LocalStPalette.current
     val size = (12f * fontScale()).sp
     LazyColumn(modifier = modifier.horizontalScroll(hScroll), state = listState) {
-        items(lines.size) { i ->
-            val color = when (logTone(lines[i])) {
+        items(lines, key = { it.id }) { line ->
+            val color = when (line.tone) {
                 LogTone.Error -> Color(0xFFFF8C8C)
                 LogTone.Warn -> Color(0xFFE8C07A)
                 LogTone.Normal -> Color(p.text)
             }
             Text(
-                lines[i],
+                line.text,
                 color = color,
                 fontFamily = StMono,
                 fontSize = size,

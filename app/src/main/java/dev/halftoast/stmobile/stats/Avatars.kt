@@ -1,5 +1,6 @@
 package dev.halftoast.stmobile.stats
 
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.webkit.CookieManager
 import androidx.compose.ui.graphics.ImageBitmap
@@ -15,6 +16,7 @@ import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import kotlin.math.roundToInt
 
 /** SillyTavern's avatar thumbnail endpoint for a character's `.png` file name. */
 fun avatarUrl(serverUrl: String, file: String): String =
@@ -131,5 +133,13 @@ private fun decodeAvatar(bytes: ByteArray, targetPx: Int): ImageBitmap? {
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
     val options = BitmapFactory.Options().apply { inSampleSize = avatarSampleSize(bounds.outWidth, bounds.outHeight, targetPx) }
-    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
+    val sampled = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: return null
+    // Power-of-two sampling can leave the shorter side near 2× the target, about 4× the memory, in a
+    // cache of up to 200 avatars: scale the rest of the way.
+    val short = minOf(sampled.width, sampled.height)
+    if (short <= targetPx * 5 / 4) return sampled.asImageBitmap()
+    val scale = targetPx.toFloat() / short
+    val scaled = Bitmap.createScaledBitmap(sampled, (sampled.width * scale).roundToInt(), (sampled.height * scale).roundToInt(), true)
+    if (scaled !== sampled) sampled.recycle()
+    return scaled.asImageBitmap()
 }

@@ -2,6 +2,7 @@ package dev.halftoast.stmobile.panel
 
 import android.content.Context
 import dev.halftoast.stmobile.settings.ConnectionForm
+import java.util.concurrent.ConcurrentHashMap
 
 /** Builds `(command, stdin)` pairs for the read-only probe scripts in assets/probes. */
 object Probes {
@@ -43,6 +44,9 @@ object Probes {
         return "ST_USER='$userDir' $interpreter" to load(asset)
     }
 
+    // Read once: probes poll every few seconds, from the main thread.
+    private val assetCache = ConcurrentHashMap<String, String>()
+
     private fun readAsset(ctx: Context, name: String): String =
-        ctx.assets.open("probes/$name").bufferedReader().use { it.readText() }
+        assetCache.getOrPut(name) { ctx.assets.open("probes/$name").bufferedReader().use { it.readText() } }
 }

@@ -15,6 +15,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationCompat
 import androidx.core.app.ServiceCompat
@@ -91,11 +92,17 @@ class KeepAliveService : Service() {
                 ContextCompat.checkSelfPermission(activity, Manifest.permission.POST_NOTIFICATIONS)
                 != PackageManager.PERMISSION_GRANTED
             ) {
-                // Register must happen before STARTED; the key is unique per call.
-                activity.activityResultRegistry.register(
+                // Register must happen before STARTED; the key is unique per call, so unregister once
+                // answered (the registry would otherwise keep this callback, and the Activity, for good).
+                lateinit var request: ActivityResultLauncher<String>
+                request = activity.activityResultRegistry.register(
                     "keepalive-notif-${System.nanoTime()}",
                     ActivityResultContracts.RequestPermission(),
-                ) { askBattery() }.launch(Manifest.permission.POST_NOTIFICATIONS)
+                ) {
+                    request.unregister()
+                    askBattery()
+                }
+                request.launch(Manifest.permission.POST_NOTIFICATIONS)
             } else {
                 askBattery()
             }
