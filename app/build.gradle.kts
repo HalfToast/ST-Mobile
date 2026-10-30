@@ -48,9 +48,6 @@ android {
         }
     }
 
-    // server/stpanel ships as the asset "stpanel" (the built-in copy for servers without one).
-    sourceSets["main"].assets.srcDirs("src/main/assets", "../server")
-
     buildFeatures {
         compose = true
         buildConfig = true
@@ -59,6 +56,37 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+/**
+ * Copies server/stpanel, and only it, into an asset folder of its own: anything else that lands in
+ * server/ (notes, test files) stays out of the APK.
+ */
+abstract class StpanelAsset : DefaultTask() {
+    @get:InputFile
+    abstract val script: RegularFileProperty
+
+    @get:OutputDirectory
+    abstract val outputDir: DirectoryProperty
+
+    @TaskAction
+    fun copy() {
+        val out = outputDir.get().asFile
+        out.deleteRecursively()
+        out.mkdirs()
+        script.get().asFile.copyTo(File(out, "stpanel"))
+    }
+}
+
+val stpanelAsset = tasks.register<StpanelAsset>("stpanelAsset") {
+    script.set(rootProject.layout.projectDirectory.file("server/stpanel"))
+}
+
+// server/stpanel ships as the asset "stpanel" (the built-in copy for servers without one).
+androidComponents {
+    onVariants { variant ->
+        variant.sources.assets?.addGeneratedSourceDirectory(stpanelAsset, StpanelAsset::outputDir)
     }
 }
 

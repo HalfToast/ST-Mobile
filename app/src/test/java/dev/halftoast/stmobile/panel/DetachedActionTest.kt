@@ -166,6 +166,7 @@ class DetachedActionTest {
         val c = Probes.actionWith(File("../server/stpanel").readText(), "status", stDir.path, null)
         val builtIn = runAs(listOf("sh", "-c"), c, basePath)
         assertTrue(builtIn.out + builtIn.err, builtIn.out.contains("OFFLINE"))
+        assertEquals(builtIn.err, 0, builtIn.exit)
 
         val bin = File(work, "bin").apply { mkdirs() }
         File(bin, "stpanel").apply { writeText("#!/bin/sh\necho installed\n"); setExecutable(true) }
