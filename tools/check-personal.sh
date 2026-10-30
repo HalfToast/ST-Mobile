@@ -20,7 +20,7 @@ cd "$(dirname "$0")/.."
 allow=tools/check-personal.allow
 private=.superpowers/personal-patterns
 # Names from a chat, the old process ledger, then words allowed only in places.
-pattern='HyperOS|MIUI|HalfToast'"'"'s|Seraphina|Aria|Ezra|Ruling [0-9]|Tailscale'
+pattern='HyperOS|MIUI|HalfToast'"'"'s|Ruling [0-9]|Tailscale'
 exclude=(':!tools/check-personal.sh' ":!$allow")
 
 personal=
