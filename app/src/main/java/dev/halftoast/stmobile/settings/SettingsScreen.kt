@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.background
 import androidx.compose.ui.graphics.Color
+import dev.halftoast.stmobile.BuildConfig
 import dev.halftoast.stmobile.ui.LocalStPalette
 import dev.halftoast.stmobile.ui.StButton
 import dev.halftoast.stmobile.ui.StSectionTitle
@@ -202,7 +203,15 @@ fun SettingsScreen(
                 )
             }
             StButton("Re-run setup", onRerunSetup, Modifier.fillMaxWidth())
+
+            HorizontalDivider(color = Color(p.border))
+            StSectionTitle("About")
+            Text(appVersionLabel(), color = Color(p.muted), style = MaterialTheme.typography.bodySmall)
             Spacer(Modifier.height(24.dp))
         }
     }
 }
+
+/** "ST Mobile <version> (build <code>)", the installed build by default. */
+fun appVersionLabel(versionName: String = BuildConfig.VERSION_NAME, versionCode: Int = BuildConfig.VERSION_CODE): String =
+    "ST Mobile $versionName (build $versionCode)"
