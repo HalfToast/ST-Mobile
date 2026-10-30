@@ -1,6 +1,8 @@
 package dev.halftoast.stmobile.chat
 
 import android.os.SystemClock
+import android.util.Log
+import dev.halftoast.stmobile.StMobileApp
 import dev.halftoast.stmobile.chat.ConnectionWatch.Decision
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -11,7 +13,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Carries out [ConnectionWatch] for the live Chat: watches the phone's VPN and the page's failed
- * requests, probes the server off the main thread, and covers, uncovers or reloads through [holder].
+ * requests, probes the server off the main thread (real ST must answer /version, see [UnreachableProbe.check]), and covers, uncovers or reloads through [holder].
  * Runs only between [start] and [stop] (the Activity's foreground): no callback or probe loop in the
  * background; [start] picks up whatever changed meanwhile. [scope] runs on the main thread.
  */
@@ -83,14 +85,17 @@ class ConnectionMonitor(
         when (decision) {
             Decision.None -> Unit
             is Decision.Cover -> {
+                if (holder.cover.value != decision.case) Log.i(StMobileApp.LOG_TAG, "CONN cover=${decision.case}")
                 holder.cover(decision.case)
                 startTicker()
             }
             Decision.Uncover -> {
+                Log.i(StMobileApp.LOG_TAG, "CONN uncover reload=false")
                 stopTicker()
                 holder.uncover()
             }
             Decision.Reload -> {
+                Log.i(StMobileApp.LOG_TAG, "CONN uncover reload=true")
                 // ST asks for a reload after a failed save; Loading (with its pill) drops the cover.
                 stopTicker()
                 holder.reload()
@@ -114,7 +119,9 @@ class ConnectionMonitor(
         }
         _checking.value = true
         probing = scope.launch {
-            val verdict = probe.verdict(serverUrl())
+            val startedAt = SystemClock.elapsedRealtime()
+            val verdict = probe.check(serverUrl())
+            Log.i(StMobileApp.LOG_TAG, "CONN probe=${verdict ?: "reachable"} ms=${SystemClock.elapsedRealtime() - startedAt}")
             if (!started) return@launch
             probing = null
             _checking.value = false

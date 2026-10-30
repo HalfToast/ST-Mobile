@@ -134,7 +134,3 @@ class ConnectionWatch(private val now: () -> Long) {
         const val FAILURE_PROBE_GAP_MS = 3_000L
     }
 }
-
-/** A probe's answer: null when ST's port answered (even without a VPN), else why it didn't. */
-fun probeVerdict(vpnUp: Boolean, failure: ConnectFailure?): UnreachableCase? =
-    if (failure == null) null else classifyUnreachable(vpnUp, failure)

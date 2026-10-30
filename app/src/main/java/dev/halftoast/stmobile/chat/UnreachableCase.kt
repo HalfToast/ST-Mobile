@@ -7,12 +7,16 @@ import android.net.NetworkCapabilities
 import dev.halftoast.stmobile.panel.ActionResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import android.webkit.CookieManager
+import dev.halftoast.stmobile.stats.readAtMost
 import java.net.ConnectException
+import java.net.HttpURLConnection
 import java.net.InetSocketAddress
 import java.net.NoRouteToHostException
 import java.net.Socket
 import java.net.SocketTimeoutException
 import java.net.URI
+import java.net.URL
 
 /** Why Chat can't reach SillyTavern, as far as the phone can tell. Picks the Unreachable screen's words and buttons. */
 enum class UnreachableCase {
@@ -22,20 +26,64 @@ enum class UnreachableCase {
     ServerNotRunning,
     /** No answer at all with the VPN up: asleep, or signed out of Tailscale. */
     TabletNotAnswering,
-    /** ST's port answers; the page failed for another reason (shown as the plain reason). */
+    /** SillyTavern itself answers; the page failed for another reason (shown as the plain reason). */
     Other,
 }
 
 /** How a TCP connect to ST's port failed. */
 enum class ConnectFailure { Refused, Timeout, Unreachable, Other }
 
-/** [failure] is null when the connect succeeded. */
-fun classifyUnreachable(vpnUp: Boolean, failure: ConnectFailure?): UnreachableCase = when {
+/**
+ * What answered `GET <server>/version`. A bare TCP connect proves nothing: a carrier's CGNAT accepts
+ * connects to any 100.x address with Tailscale off.
+ */
+enum class ServerAnswer {
+    /** SillyTavern: its version JSON, or its redirect to the login page (no session yet). */
+    SillyTavern,
+    /** 401/403: ST's auth or whitelist (trusted only through the VPN). */
+    AuthRequired,
+    /** No answer, or one that isn't ST's (timeout, HTML, garbage, another status). */
+    None,
+}
+
+/** Reads a `/version` response: status [code], its `Location` header and (for a 200) its [body]. */
+fun serverAnswerOf(code: Int, location: String?, body: String?): ServerAnswer = when {
+    code == 200 && body != null && looksLikeStVersion(body) -> ServerAnswer.SillyTavern
+    code in 300..399 && location != null && isLoginLocation(location) -> ServerAnswer.SillyTavern
+    code == 401 || code == 403 -> ServerAnswer.AuthRequired
+    else -> ServerAnswer.None
+}
+
+/** ST's `/version` JSON: an object with a non-blank `pkgVersion` or `gitRevision` (what [parseCacheNamespace] reads). */
+fun looksLikeStVersion(body: String): Boolean = try {
+    val o = org.json.JSONObject(body)
+    listOf("pkgVersion", "gitRevision").any { o.optString(it, "").let { v -> v.isNotBlank() && v != "null" } }
+} catch (_: Exception) {
+    false
+}
+
+private fun isLoginLocation(location: String): Boolean = try {
+    (URI(location.trim()).path ?: "").startsWith("/login")
+} catch (_: Exception) {
+    false
+}
+
+/**
+ * Whether ST can be reached, from a probe: null when SillyTavern itself answered, else why not.
+ * [connect] (a TCP connect, null if it connected or wasn't tried) only tells a refused port (ST not
+ * running) from silence; it never proves reachability.
+ */
+fun connectionVerdict(vpnUp: Boolean, answer: ServerAnswer, connect: ConnectFailure?): UnreachableCase? = when {
+    answer == ServerAnswer.SillyTavern -> null
+    answer == ServerAnswer.AuthRequired && vpnUp -> null
     !vpnUp -> UnreachableCase.TailscaleOff
-    failure == null -> UnreachableCase.Other
-    failure == ConnectFailure.Refused -> UnreachableCase.ServerNotRunning
+    connect == ConnectFailure.Refused -> UnreachableCase.ServerNotRunning
     else -> UnreachableCase.TabletNotAnswering
 }
+
+/** The Unreachable screen's case: as [connectionVerdict], with [UnreachableCase.Other] when ST answered. */
+fun classifyUnreachable(vpnUp: Boolean, answer: ServerAnswer, connect: ConnectFailure?): UnreachableCase =
+    connectionVerdict(vpnUp, answer, connect) ?: UnreachableCase.Other
 
 /** Android reports a refused connect or a missing route as a ConnectException with the errno in its message. */
 fun connectFailureOf(e: Throwable?): ConnectFailure? {
@@ -103,7 +151,7 @@ class StartOutcomeWatch {
     }
 }
 
-/** The phone-side probes behind [classifyUnreachable]. Logs nothing (addresses are private). */
+/** The phone-side probes behind [connectionVerdict]. Logs nothing (addresses are private). */
 class UnreachableProbe(context: Context) {
     private val connectivity = context.applicationContext.getSystemService(ConnectivityManager::class.java)
 
@@ -114,41 +162,56 @@ class UnreachableProbe(context: Context) {
         false
     }
 
-    /** Off the main thread: the VPN check, then a ~2 s TCP connect to ST's host and port. */
-    suspend fun classify(serverUrl: String): UnreachableCase = withContext(Dispatchers.IO) {
-        if (!vpnUp()) return@withContext UnreachableCase.TailscaleOff
-        when (val r = connect(serverUrl)) {
-            Connect.NoUrl -> UnreachableCase.Other
-            Connect.Ok -> classifyUnreachable(vpnUp = true, failure = null)
-            is Connect.Failed -> classifyUnreachable(vpnUp = true, failure = r.failure)
-        }
-    }
+    /** The Unreachable screen's case for a failed load; see [check]. */
+    suspend fun classify(serverUrl: String): UnreachableCase = check(serverUrl) ?: UnreachableCase.Other
 
     /**
-     * For a chat that is loaded: null if ST's port answers (with or without a VPN), else why not.
-     * Off the main thread, like [classify]. A URL without a host counts as answering (nothing to say).
+     * Off the main thread: asks ST's `/version` (with the WebView's session cookie, ~2.5 s connect and
+     * read). Null when SillyTavern itself answered; otherwise the VPN check and, with the VPN up, a
+     * ~2 s TCP connect to tell a refused port from silence ([connectionVerdict]). A URL without a host
+     * counts as answering (nothing to say).
      */
-    suspend fun verdict(serverUrl: String): UnreachableCase? = withContext(Dispatchers.IO) {
-        when (val r = connect(serverUrl)) {
-            Connect.NoUrl, Connect.Ok -> null
-            is Connect.Failed -> probeVerdict(vpnUp(), r.failure)
+    suspend fun check(serverUrl: String): UnreachableCase? = withContext(Dispatchers.IO) {
+        if (serverEndpoint(serverUrl) == null) return@withContext null
+        val answer = askVersion(serverUrl)
+        if (answer == ServerAnswer.SillyTavern) return@withContext null
+        val vpn = vpnUp()
+        val connect = if (vpn) connect(serverUrl) else null
+        connectionVerdict(vpn, answer, connect)
+    }
+
+    /** `GET /version`, no redirects followed, at most [MAX_VERSION_BYTES] read. Any failure is [ServerAnswer.None]. */
+    private fun askVersion(serverUrl: String): ServerAnswer {
+        var conn: HttpURLConnection? = null
+        return try {
+            val url = serverUrl.trimEnd('/') + "/version"
+            conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                connectTimeout = HTTP_TIMEOUT_MS
+                readTimeout = HTTP_TIMEOUT_MS
+                instanceFollowRedirects = false
+                useCaches = false
+                CookieManager.getInstance().getCookie(url)?.takeIf { it.isNotBlank() }?.let { setRequestProperty("Cookie", it) }
+            }
+            val code = conn.responseCode
+            val body = if (code == 200) {
+                conn.inputStream.use { stream -> readAtMost(stream, MAX_VERSION_BYTES) }?.toString(Charsets.UTF_8)
+            } else null
+            serverAnswerOf(code, conn.getHeaderField("Location"), body)
+        } catch (_: Exception) {
+            ServerAnswer.None
+        } finally {
+            conn?.disconnect()
         }
     }
 
-    private sealed interface Connect {
-        data object NoUrl : Connect
-        data object Ok : Connect
-        data class Failed(val failure: ConnectFailure) : Connect
-    }
-
-    /** A ~2 s TCP connect to ST's host:port. */
-    private fun connect(serverUrl: String): Connect {
-        val (host, port) = serverEndpoint(serverUrl) ?: return Connect.NoUrl
+    /** A ~2 s TCP connect to ST's host:port: null if it connected, else how it failed. */
+    private fun connect(serverUrl: String): ConnectFailure? {
+        val (host, port) = serverEndpoint(serverUrl) ?: return null
         return try {
             Socket().use { it.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS) }
-            Connect.Ok
+            null
         } catch (e: Exception) {
-            Connect.Failed(connectFailureOf(e) ?: ConnectFailure.Other)
+            connectFailureOf(e) ?: ConnectFailure.Other
         }
     }
 
@@ -173,5 +236,7 @@ class UnreachableProbe(context: Context) {
 
     private companion object {
         const val CONNECT_TIMEOUT_MS = 2_000
+        const val HTTP_TIMEOUT_MS = 2_500
+        const val MAX_VERSION_BYTES = 64 * 1024
     }
 }

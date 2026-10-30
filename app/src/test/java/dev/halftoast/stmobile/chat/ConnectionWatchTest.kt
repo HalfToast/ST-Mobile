@@ -120,13 +120,6 @@ class ConnectionWatchTest {
         assertNull(watch.cover)
     }
 
-    @Test fun verdictIsReachableWheneverThePortAnswers() {
-        assertNull(probeVerdict(vpnUp = false, failure = null))
-        assertNull(probeVerdict(vpnUp = true, failure = null))
-        assertEquals(UnreachableCase.TailscaleOff, probeVerdict(vpnUp = false, failure = ConnectFailure.Timeout))
-        assertEquals(UnreachableCase.ServerNotRunning, probeVerdict(vpnUp = true, failure = ConnectFailure.Refused))
-        assertEquals(UnreachableCase.TabletNotAnswering, probeVerdict(vpnUp = true, failure = ConnectFailure.Timeout))
-    }
 
     @Test fun aRefusedPortMeansTheProcessWasGoneSoComingBackReloads() {
         vpnWasUp()

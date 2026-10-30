@@ -49,7 +49,7 @@ class UnreachableActions(
  * Chat can't reach SillyTavern. The screen says why, as far as the phone can tell: classified again
  * whenever [state] changes and after every load attempt ([attempt], so also a Retry that fails within
  * a frame). It offers what helps: open Tailscale, start the server, or the Control Center. While the
- * case is being worked out, and when the server's port answers, it shows the plain [state] reason.
+ * case is being worked out, and when SillyTavern itself answers, it shows the plain [state] reason.
  * With Tailscale off it retries once each time a VPN comes up (see [VpnRetryGate]).
  * [serverOnline]: the dashboard says the process runs, so Start is off, as in the Control Center.
  * [fixedCase]: the case is already known (a connection lost under a loaded chat); no classifying and
