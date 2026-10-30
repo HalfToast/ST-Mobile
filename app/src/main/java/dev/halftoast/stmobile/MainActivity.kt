@@ -4,12 +4,10 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.os.SystemClock
 import android.util.Log
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
-import androidx.activity.compose.BackHandler
+import androidx.activity.compose.PredictiveBackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
@@ -53,9 +51,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.lifecycle.lifecycleScope
@@ -63,8 +59,6 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import java.lang.ref.WeakReference
 import kotlinx.coroutines.launch
-import dev.halftoast.stmobile.chat.BackAction
-import dev.halftoast.stmobile.chat.BackPressPolicy
 import dev.halftoast.stmobile.chat.ChatScreen
 import dev.halftoast.stmobile.chat.ChatState
 import dev.halftoast.stmobile.chat.ConnectionMonitor
@@ -78,9 +72,11 @@ import dev.halftoast.stmobile.chat.isLiveServerPage
 import dev.halftoast.stmobile.chat.reloadWhenServerBack
 import dev.halftoast.stmobile.keepalive.KeepAliveService
 import dev.halftoast.stmobile.logs.LogsScreen
-import dev.halftoast.stmobile.nav.FloatingNav
+import dev.halftoast.stmobile.nav.BackMenu
+import dev.halftoast.stmobile.nav.MenuSpot
+import dev.halftoast.stmobile.nav.menuBottomGapDp
+import dev.halftoast.stmobile.nav.menuEdge
 import dev.halftoast.stmobile.nav.chatSettled
-import dev.halftoast.stmobile.nav.navHidden
 import dev.halftoast.stmobile.nav.slideAnimates
 import dev.halftoast.stmobile.nav.icon
 import dev.halftoast.stmobile.panel.AndroidProbeSource
@@ -115,7 +111,10 @@ class MainActivity : ComponentActivity() {
     /** Covers the chat when the connection drops under it, and brings it back. Foreground only. */
     private lateinit var connection: ConnectionMonitor
     private var chatTabShown = true
-    private var lastUnconsumedBackAtMs: Long? = null
+    /** Where the back menu is open; null while closed. */
+    private var backMenu by mutableStateOf<MenuSpot?>(null)
+    /** The side the last back gesture came from ([androidx.activity.BackEventCompat.swipeEdge]). */
+    private var lastBackEdge: Int? = null
 
     /**
      * Activity-scoped so actions outlive tab switches. It can outlive this Activity instance, so its
@@ -185,13 +184,7 @@ class MainActivity : ComponentActivity() {
                 var overlay by rememberSaveable { mutableStateOf(Overlay.None) }
                 // Chat works without SSH; Panel, Stats and Logs show Setup until it's done.
                 var setupDone by rememberSaveable { mutableStateOf(settings.setupComplete) }
-                var fab by remember { mutableStateOf(settings.fabPosition) }
-                // Read only inside FloatingNav's placement and event code, never during composition.
-                var chatSize by remember { mutableStateOf(IntSize.Zero) }
                 val imeTarget = WindowInsets.imeAnimationTarget
-                val sheetOpen = holder.sheetOpen.collectAsState()
-                val chatState = holder.state.collectAsState()
-                val chatCover = holder.cover.collectAsState()
                 val density = LocalDensity.current
                 // The native screen drawn over Chat (sliding in, shown, or sliding out); null once Chat
                 // has settled. Chat stays composed under it until it fully covers Chat.
@@ -248,7 +241,11 @@ class MainActivity : ComponentActivity() {
                         onStartServer = unreachableActions.onStartServer,
                     )
                 }
-                BackHandler {
+                PredictiveBackHandler { gesture ->
+                    var edge: Int? = null
+                    // Throws if the gesture is cancelled: nothing happens then.
+                    gesture.collect { edge = it.swipeEdge }
+                    lastBackEdge = edge
                     when {
                         overlay == Overlay.Setup -> overlay = Overlay.Settings
                         overlay == Overlay.Settings -> overlay = Overlay.None
@@ -297,8 +294,7 @@ class MainActivity : ComponentActivity() {
                             Box(
                                 Modifier
                                     .fillMaxSize()
-                                    .background(Color(palette.background))
-                                    .onSizeChanged { chatSize = it },
+                                    .background(Color(palette.background)),
                             ) {
                                 ChatScreen(
                                     holder = holder,
@@ -337,31 +333,23 @@ class MainActivity : ComponentActivity() {
                                         .windowInsetsPadding(WindowInsets.systemBars)
                                         .windowInsetsPadding(WindowInsets.imeAnimationTarget),
                                 )
-                                FloatingNav(
-                                    position = fab,
-                                    containerSize = { chatSize },
-                                    hidden = {
-                                        navHidden(
-                                            imeTarget.getBottom(density),
-                                            sheetOpen.value,
-                                            chatUnreachable = chatState.value is ChatState.Unreachable || chatCover.value != null,
-                                        )
-                                    },
-                                    onMoved = {
-                                        fab = it
-                                        settings.fabPosition = it
-                                    },
-                                    onOpen = { screen = it },
-                                    // The user asked for it: no "never reload a working chat" guard here.
-                                    onRefresh = { holder.reload() },
-                                    // Debug only: long-press kills the renderer to test recovery.
-                                    debugLongPress = if (BuildConfig.DEBUG) {
-                                        {
-                                            Log.i(StMobileApp.LOG_TAG, "debug: killing renderer")
-                                            holder.webView.loadUrl("chrome://kill")
-                                        }
-                                    } else null,
-                                )
+                                backMenu?.let { spot ->
+                                    BackMenu(
+                                        spot = spot,
+                                        onDismiss = { backMenu = null },
+                                        onOpen = { screen = it },
+                                        // The user asked for it: no "never reload a working chat" guard here.
+                                        onReload = { holder.reload() },
+                                        onQuit = { moveTaskToBack(true) },
+                                        // Debug only: long-press Reload kills the renderer to test recovery.
+                                        debugLongPress = if (BuildConfig.DEBUG) {
+                                            {
+                                                Log.i(StMobileApp.LOG_TAG, "debug: killing renderer")
+                                                holder.webView.loadUrl("chrome://kill")
+                                            }
+                                        } else null,
+                                    )
+                                }
                             }
                         }
                         covering?.let { shown ->
@@ -488,25 +476,23 @@ class MainActivity : ComponentActivity() {
 
     private fun handleChatBack() {
         if (holder.goBackIfOffOrigin()) return
-        // Unreachable, Loading, Stalled, External: the page is hidden or isn't SillyTavern's UI, so
-        // don't poke it; plain back (history above, then "press again").
-        // Covered (connection lost) or not ST's UI: plain back, the page is not poked.
+        // Unreachable, Loading, Stalled, External, or covered (connection lost): the page is hidden or
+        // isn't SillyTavern's UI, so don't poke it; back opens the menu.
         if (!holder.state.value.backProbesPage || holder.cover.value != null) return onBackDecided(consumed = false)
         holder.probeBack(::onBackDecided)
     }
 
+    /**
+     * SillyTavern closed something with that back ([consumed]); otherwise back opens the menu, just
+     * above ST's message box when the page is ST's UI.
+     */
     private fun onBackDecided(consumed: Boolean) {
-        val now = SystemClock.elapsedRealtime()
-        when (BackPressPolicy.decide(consumed, lastUnconsumedBackAtMs, now)) {
-            BackAction.ConsumedByPage -> lastUnconsumedBackAtMs = null
-            BackAction.ShowPressAgainHint -> {
-                lastUnconsumedBackAtMs = now
-                Toast.makeText(this, "Press back again to leave", Toast.LENGTH_SHORT).show()
-            }
-            BackAction.MoveTaskToBack -> {
-                lastUnconsumedBackAtMs = null
-                moveTaskToBack(true)
-            }
+        if (consumed) return
+        val edge = menuEdge(lastBackEdge)
+        if (!holder.state.value.backProbesPage || holder.cover.value != null) {
+            backMenu = MenuSpot(edge, menuBottomGapDp(null))
+            return
         }
+        holder.measureSendForm { gap -> backMenu = MenuSpot(edge, menuBottomGapDp(gap)) }
     }
 }

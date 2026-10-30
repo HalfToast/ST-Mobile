@@ -249,6 +249,22 @@ class WebViewHolder(
         }
     }
 
+    /**
+     * How tall SillyTavern's message box area is from the page's bottom, in CSS px; null if the page
+     * has none (or doesn't answer in time).
+     */
+    fun measureSendForm(result: (Float?) -> Unit) {
+        if (destroyed) return result(null)
+        var answered = false
+        fun answer(gap: Float?) {
+            if (answered) return
+            answered = true
+            result(gap)
+        }
+        mainHandler.postDelayed({ answer(null) }, PROBE_BACK_TIMEOUT_MS)
+        webView.evaluateJavascript(SEND_FORM_GAP_JS) { answer(it?.toFloatOrNull()?.takeIf { gap -> gap > 0f }) }
+    }
+
     /** Builds a fresh WebView (renderer died, server URL changed). Does not load; call [reload]. */
     private fun recreate() {
         navToken++
@@ -685,6 +701,10 @@ class WebViewHolder(
         const val OPEN_UI_SELECTOR = ".openDrawer, dialog[open]:not(#stm-select-sheet), " +
             "#dialogue_popup:not([style*=\"none\"]), #character_popup:not([style*=\"none\"]), " +
             "#select_chat_popup:not([style*=\"none\"]), #stm-select-sheet.stm-open"
+
+        /** The page's bottom minus the top of ST's message box (#form_sheld), in CSS px; -1 without one. */
+        const val SEND_FORM_GAP_JS = "(function(){var f=document.getElementById('form_sheld');" +
+            "return f?innerHeight-f.getBoundingClientRect().top:-1;})()"
 
         /** Counts [OPEN_UI_SELECTOR]. */
         const val OPEN_UI_COUNT_JS = "document.querySelectorAll('$OPEN_UI_SELECTOR').length"
