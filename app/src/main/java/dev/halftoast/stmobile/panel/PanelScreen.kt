@@ -215,7 +215,7 @@ private fun UpdateBanner(behind: Int, ui: PanelUi, onUpdate: () -> Unit) {
                 color = Color(LocalStPalette.current.accent),
                 style = MaterialTheme.typography.bodyMedium,
             )
-            StButton("Update", onUpdate, enabled = ui.actionsEnabled, busy = ui.busy == PanelAction.Update)
+            StButton("Update", onUpdate, enabled = ui.actionsEnabled, busy = ui.isRunning(PanelAction.Update))
         }
     }
 }
@@ -275,7 +275,7 @@ private fun androidx.compose.foundation.layout.RowScope.ActionButton(
         modifier = Modifier.weight(1f),
         enabled = enabled && ui.actionsEnabled,
         tone = if (action == PanelAction.Stop) StTone.Danger else StTone.Normal,
-        busy = ui.busy == action,
+        busy = ui.isRunning(action),
     )
 }
 

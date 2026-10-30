@@ -41,6 +41,7 @@ fun parseDashboard(raw: String): DashboardState {
         recentLogs = kv.filter { it.first == "log" }.map { it.second }.take(3),
         userDir = get("user_dir"),
         userDirMissing = get("user_dir_missing") == "1",
+        runningAction = get("action"),
     )
 }
 

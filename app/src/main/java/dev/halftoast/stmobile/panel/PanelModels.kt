@@ -28,6 +28,8 @@ data class DashboardState(
     val userDir: String? = null,
     /** That folder doesn't exist on the tablet, so the counts are meaningless (all zero). */
     val userDirMissing: Boolean = false,
+    /** The stpanel subcommand of an app-started action still running on the tablet, if any. */
+    val runningAction: String? = null,
 )
 
 data class CharacterStat(val name: String, val messages: Int, val lastActiveEpochSec: Long, val avatarFile: String? = null)

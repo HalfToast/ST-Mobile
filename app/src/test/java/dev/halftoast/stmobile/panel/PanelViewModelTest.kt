@@ -154,8 +154,8 @@ class PanelViewModelTest {
     @Test fun actionsAndWhitelistRunDetached() = runTest {
         vm.request(PanelAction.Start); advanceUntilIdle()
         vm.addWhitelistEntry("192.168.1.50"); advanceUntilIdle()
-        assertTrue(Probes.wrapDetached("stpanel start") in shell.rawCommands)
-        assertTrue(Probes.wrapDetached("stpanel whitelist") in shell.rawCommands)
+        assertTrue(Probes.wrapDetached("stpanel start", marker = "start") in shell.rawCommands)
+        assertTrue(Probes.wrapDetached("stpanel whitelist", marker = "whitelist") in shell.rawCommands)
     }
     @Test fun startRunsWithoutConfirm() = runTest { vm.request(PanelAction.Start); advanceUntilIdle(); assertTrue(shell.commands.any { it.contains("stpanel start") }) }
     @Test fun cleanFeedsYes() = runTest { vm.request(PanelAction.CleanCache); vm.confirm(); advanceUntilIdle(); assertEquals("y\n", shell.stdinFor("stpanel clean")) }
@@ -174,11 +174,25 @@ class PanelViewModelTest {
         shell.actionFailure = SshError.Timeout()
         vm.request(PanelAction.Backup); advanceUntilIdle()
         assertEquals(
-            ActionResult.StillRunning("Backup is taking a while and keeps running on the tablet. Check the dashboard later."),
+            ActionResult.StillRunning("Backup is taking a while and keeps running on the tablet. The buttons come back when it's done."),
             vm.ui.value.lastAction,
         )
         assertNull(vm.ui.value.error)
         assertNull(vm.ui.value.busy)
+    }
+    @Test fun anActionStillRunningOnTheTabletKeepsActionsOffButPollsGoOn() = runTest {
+        shell.actionFailure = SshError.Timeout()
+        shell.dashboards = mutableListOf(ONLINE + "action=backup\n", ONLINE + "action=backup\n", ONLINE)
+        vm.request(PanelAction.Backup); advanceUntilIdle()
+        assertNull(vm.ui.value.busy)
+        assertTrue(vm.ui.value.tabletBusy)
+        assertTrue(vm.ui.value.isRunning(PanelAction.Backup))
+        assertTrue(!vm.ui.value.actionsEnabled)
+        vm.request(PanelAction.Restart); advanceUntilIdle()
+        assertEquals("nothing else starts meanwhile", 1, shell.commands.count { it.startsWith("stpanel") })
+        vm.setVisible(true); advanceTimeBy(6_000); vm.setVisible(false)
+        assertTrue("polls go on, and see it end", vm.ui.value.actionsEnabled)
+        assertTrue(!vm.ui.value.isRunning(PanelAction.Backup))
     }
     @Test fun secondActionIgnoredWhileBusy() = runTest { shell.delayMs = 1_000; vm.request(PanelAction.Backup); vm.request(PanelAction.Restart); advanceUntilIdle(); assertEquals(1, shell.commands.count { it.contains("stpanel") }) }
     @Test fun pollsOnlyWhileVisible() = runTest { vm.setVisible(true); advanceTimeBy(11_000); val n = shell.dashboardCalls; vm.setVisible(false); advanceTimeBy(20_000); assertEquals(n, shell.dashboardCalls); assertTrue(n in 2..3) }

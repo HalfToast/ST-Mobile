@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Read-only dashboard probe for ST Mobile. Prints KEY=VALUE lines.
 # Mirrors stpanel's get_sillytavern_pid / get_system_info / get_asset_counts / get_git_info.
-# The only writes are the ones stpanel itself does: .git/.last_fetch_check and a background `git fetch`.
+# The only writes are the ones stpanel itself does (.git/.last_fetch_check and a background `git fetch`),
+# and the app's own files in $TMPDIR: removing stale action marks, and a 60 s copy of the slow lines
+# (see Probes.wrapDetached).
 if [ -d "/data/data/com.termux/files/home/SillyTavern" ]; then
     ST_DIR="/data/data/com.termux/files/home/SillyTavern"
 else
@@ -63,41 +65,85 @@ disk_used=$(df -h "$HOME" 2>/dev/null | awk 'NR==2 {print $5}')
 [ -n "$disk_free" ] && echo "disk_free=$disk_free"
 [ -n "$disk_used" ] && echo "disk_used_pct=$disk_used"
 
-# Asset counts (a missing user folder would otherwise just read as zero of everything)
-echo "user_dir=$(clean "${ST_USER:-default-user}")"
-[ -d "$USER_DIR" ] || echo "user_dir_missing=1"
-echo "chars=$(ls "${USER_DIR}/characters" 2>/dev/null | wc -l | tr -d ' ')"
-echo "chats=$(ls "${USER_DIR}/chats" 2>/dev/null | wc -l | tr -d ' ')"
-echo "worlds=$(ls "${USER_DIR}/worlds" 2>/dev/null | wc -l | tr -d ' ')"
-echo "personas=$(ls "${USER_DIR}/User Avatars" 2>/dev/null | wc -l | tr -d ' ')"
-echo "backups=$(ls "${BACKUP_DIR}" 2>/dev/null | grep -E '\.(tar\.gz|zip)$' | wc -l | tr -d ' ')"
-cache_size=$(du -sh "${DATA_DIR}/_cache" 2>/dev/null | awk '{print $1}')
-[ -z "$cache_size" ] && cache_size="0M"
-echo "cache_size=$cache_size"
+# An action the app started that is still running (e.g. after the app stopped waiting for it).
+# A mark is stale if its process is gone, or older than 3 h (its pid may have been reused).
+action_marks="${TMPDIR:-/tmp}/stmobile-actions"
+running_action=""
+if [ -d "$action_marks" ]; then
+    for f in "$action_marks"/*; do
+        case "$f" in *.w) continue ;; esac
+        [ -f "$f" ] || continue
+        apid=""
+        asub=""
+        read -r apid asub < "$f" 2>/dev/null
+        if [ -n "$apid" ] && kill -0 "$apid" 2>/dev/null && [ -z "$(find "$f" -mmin +180 2>/dev/null)" ]; then
+            running_action="$asub"
+        else
+            rm -f "$f"
+        fi
+    done
+fi
+[ -n "$running_action" ] && echo "action=$(clean "$running_action")"
 
-# Git info (shared 300 s background fetch with stpanel)
-branch=$(git -C "$ST_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-commit=$(git -C "$ST_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
-last_fetch_file="${ST_DIR}/.git/.last_fetch_check"
+# Shared 300 s background fetch with stpanel; never under a running action (e.g. git pull)
 now=$(date +%s)
+last_fetch_file="${ST_DIR}/.git/.last_fetch_check"
 last_fetch=0
 [ -f "$last_fetch_file" ] && last_fetch=$(cat "$last_fetch_file" 2>/dev/null || echo 0)
-if [ $(( now - last_fetch )) -ge 300 ] 2>/dev/null; then
+if [ -z "$running_action" ] && [ $(( now - last_fetch )) -ge 300 ] 2>/dev/null; then
     echo "$now" > "$last_fetch_file" 2>/dev/null || true
     (timeout 60 git -C "$ST_DIR" fetch -q </dev/null >/dev/null 2>&1 &)
 fi
-upstream=$(git -C "$ST_DIR" rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)
-if [ -n "$upstream" ]; then
-    behind=$(git -C "$ST_DIR" rev-list --count "HEAD..@{u}" 2>/dev/null || echo 0)
-    ahead=$(git -C "$ST_DIR" rev-list --count "@{u}..HEAD" 2>/dev/null || echo 0)
+
+# Counts, cache size and git state: slow (du walks the cache, git) and slow to change, so reused
+# for up to SLOW_TTL s. Never while an action runs; the action wrapper deletes the copy when one ends.
+slow_info() {
+    # Asset counts (a missing user folder would otherwise just read as zero of everything)
+    echo "user_dir=$(clean "${ST_USER:-default-user}")"
+    [ -d "$USER_DIR" ] || echo "user_dir_missing=1"
+    echo "chars=$(ls "${USER_DIR}/characters" 2>/dev/null | wc -l | tr -d ' ')"
+    echo "chats=$(ls "${USER_DIR}/chats" 2>/dev/null | wc -l | tr -d ' ')"
+    echo "worlds=$(ls "${USER_DIR}/worlds" 2>/dev/null | wc -l | tr -d ' ')"
+    echo "personas=$(ls "${USER_DIR}/User Avatars" 2>/dev/null | wc -l | tr -d ' ')"
+    echo "backups=$(ls "${BACKUP_DIR}" 2>/dev/null | grep -E '\.(tar\.gz|zip)$' | wc -l | tr -d ' ')"
+    local cache_size
+    cache_size=$(du -sh "${DATA_DIR}/_cache" 2>/dev/null | awk '{print $1}')
+    [ -z "$cache_size" ] && cache_size="0M"
+    echo "cache_size=$cache_size"
+
+    local branch commit upstream behind ahead
+    branch=$(git -C "$ST_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    commit=$(git -C "$ST_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+    upstream=$(git -C "$ST_DIR" rev-parse --abbrev-ref --symbolic-full-name @{u} 2>/dev/null)
+    if [ -n "$upstream" ]; then
+        behind=$(git -C "$ST_DIR" rev-list --count "HEAD..@{u}" 2>/dev/null || echo 0)
+        ahead=$(git -C "$ST_DIR" rev-list --count "@{u}..HEAD" 2>/dev/null || echo 0)
+    else
+        behind=0
+        ahead=0
+    fi
+    echo "branch=$(clean "$branch")"
+    echo "commit=$(clean "$commit")"
+    echo "behind=$behind"
+    echo "ahead=$ahead"
+}
+SLOW_TTL=60
+slow_file="${TMPDIR:-/tmp}/stmobile-dashboard.slow"
+slow_key="$ST_DIR/${ST_USER:-default-user}"
+cached_at=""
+cached_key=""
+[ -z "$running_action" ] && [ -f "$slow_file" ] && { IFS= read -r cached_at; IFS= read -r cached_key; } < "$slow_file" 2>/dev/null
+if [ -z "$running_action" ] && [ "$cached_key" = "$slow_key" ] && [ $(( now - cached_at )) -ge 0 ] 2>/dev/null &&
+    [ $(( now - cached_at )) -lt "$SLOW_TTL" ] 2>/dev/null; then
+    tail -n +3 "$slow_file"
 else
-    behind=0
-    ahead=0
+    slow=$(slow_info)
+    printf '%s\n' "$slow"
+    if [ -z "$running_action" ]; then
+        { printf '%s\n%s\n' "$now" "$slow_key"; printf '%s\n' "$slow"; } > "$slow_file.$$" 2>/dev/null &&
+            mv "$slow_file.$$" "$slow_file" 2>/dev/null || rm -f "$slow_file.$$"
+    fi
 fi
-echo "branch=$(clean "$branch")"
-echo "commit=$(clean "$commit")"
-echo "behind=$behind"
-echo "ahead=$ahead"
 
 # Last client
 if [ -f "$ACCESS_LOG" ] && [ -s "$ACCESS_LOG" ]; then

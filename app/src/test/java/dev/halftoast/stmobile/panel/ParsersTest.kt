@@ -36,6 +36,11 @@ class ParsersTest {
         assertTrue(d.online); assertEquals(0, d.behind); assertNull(d.batteryLevel)
     }
 
+    @Test fun dashboardRunningAction() {
+        assertEquals("update", parseDashboard("online=1\naction=update\n").runningAction)
+        assertNull(parseDashboard("online=1\n").runningAction)
+    }
+
     @Test fun dashboardTakesFirstPid() = assertEquals(12, parseDashboard("online=1\npid=12\n34\n").pid)
     @Test fun dashboardFirstPidWithNewlineValue() = assertEquals(12, parseDashboard("online=1\npid=12\n").pid)
 
@@ -103,7 +108,7 @@ class ParsersTest {
     }
 
     @Test fun actionCommands() {
-        assertEquals(Probes.wrapDetached("stpanel start"), Probes.action("start"))
+        assertEquals(Probes.wrapDetached("stpanel start", marker = "start"), Probes.action("start"))
         assertEquals("stpanel status", unwrapDetached(Probes.action("status")))
     }
 

@@ -64,7 +64,16 @@ data class PanelUi(
     val pendingWhitelistToggle: WhitelistToggle? = null,
     val lastAction: ActionResult? = null,
 ) {
-    val actionsEnabled: Boolean get() = busy == null && !whitelistBusy
+    /** Nothing this app is waiting for runs, so probes may: dashboard.sh itself holds off its `git fetch`. */
+    val probesAllowed: Boolean get() = busy == null && !whitelistBusy
+
+    /** An action keeps running on the tablet after this app stopped waiting for it (a timeout, or an earlier process). */
+    val tabletBusy: Boolean get() = dashboard?.runningAction != null
+
+    val actionsEnabled: Boolean get() = probesAllowed && !tabletBusy
+
+    /** [action] runs: here, or still on the tablet. */
+    fun isRunning(action: PanelAction): Boolean = busy == action || (busy == null && dashboard?.runningAction == action.subcommand)
 
     /** The mode switch may be used: fresh state, nothing running. */
     val whitelistToggleEnabled: Boolean
@@ -102,8 +111,9 @@ internal fun isCoveredBy(ip: String, entries: List<String>): Boolean = entries.a
  * awaits the result to update busy state and the result line; a new instance adopts an action that is
  * still running.
  *
- * Probes never run under an action (Ruling 22): a failing probe can drop the shared SSH connection,
- * and the dashboard probe's background `git fetch` could race `git pull`.
+ * Probes never run under an action this app awaits (Ruling 22): a failing probe can drop the shared SSH
+ * connection. One that outlived its wait (a timeout) is still marked on the tablet (Probes.wrapDetached):
+ * the dashboard reports it, buttons stay off until it ends, and dashboard.sh skips its `git fetch` meanwhile.
  *
  * An Update that changed the code only suggests a Restart (Ruling 27): it never reloads Chat. The
  * asset cache is namespaced by `<pkgVersion>@<gitRevision>`, so the next load after the restart uses fresh files.
@@ -356,7 +366,7 @@ class PanelViewModel(
                 throw e // this ViewModel is gone; the action itself keeps running
             } catch (_: SshError.Timeout) {
                 // Actions run detached (Probes.wrapDetached), so giving up here doesn't stop it.
-                ActionResult.StillRunning("${action.label} is taking a while and keeps running on the tablet. Check the dashboard later.")
+                ActionResult.StillRunning("${action.label} is taking a while and keeps running on the tablet. The buttons come back when it's done.")
             } catch (e: Exception) {
                 showError(e)
                 ActionResult.Failed("${action.label} failed: ${describe(e)}")
@@ -453,12 +463,12 @@ class PanelViewModel(
 
     /**
      * Probes the dashboard and returns the freshly parsed state, or null if the probe failed, its
-     * output had no `online=`, or it was skipped because an action is running (unless [force]).
+     * output had no `online=`, or it was skipped because an awaited action is running (unless [force]).
      */
     private suspend fun refreshNow(force: Boolean = false): DashboardState? {
-        if (!force && !_ui.value.actionsEnabled) return null
+        if (!force && !_ui.value.probesAllowed) return null
         return probeLock.withLock {
-            if (!force && !_ui.value.actionsEnabled) return@withLock null
+            if (!force && !_ui.value.probesAllowed) return@withLock null
             try {
                 val (command, script) = probes.dashboard()
                 val r = shell.exec(command, script, PROBE_TIMEOUT_MS)
