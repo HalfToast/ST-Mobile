@@ -343,8 +343,10 @@ Environment variables:
 stpanel only ever looks up and stops the SillyTavern in its own folder: the process in its pid file, and
 `node` processes running that folder's `server.js` (by its full path, or as `server.js` started from that
 folder). Other Node apps on the machine are left alone. It
-starts SillyTavern as `node server.js`, without `npm install`: run `./start.sh` once after cloning, and
-again after an update that changes SillyTavern's packages.
+starts SillyTavern as `node server.js`, without `npm install`: run `./start.sh` (or `npm install`) once
+after cloning. `stpanel update` runs `npm install` itself when the pull changed `package.json` or
+`package-lock.json`, with the `npm` next to the `node` it found; if that npm is missing or fails, the
+update says so and fails.
 
 ## Using the app
 
@@ -423,8 +425,9 @@ while SillyTavern runs, but the device's battery saver can still stop Termux.
   MagicDNS short name (just the machine name) or your own DNS name gets the general messages.
 - The whitelist manager can add entries but not remove them. To remove one, edit `config.yaml` on the
   server.
-- Update runs `git pull` only. If an update changes SillyTavern's packages, run `npm install` (or
-  `./start.sh` once) in the SillyTavern folder.
+- Update runs `git pull`, then `npm install` only when the pull changed `package.json` or
+  `package-lock.json`. Without `npm` next to `node` on the server, such an update fails with a
+  message; run `npm install` in the SillyTavern folder by hand then.
 
 ## Build it yourself
 

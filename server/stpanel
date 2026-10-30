@@ -773,8 +773,27 @@ view_access_logs() {
     fi
 }
 
+# SillyTavern's packages, as its start.sh installs them at every start (stpanel starts node
+# directly, so an update that changes them needs this). npm from the folder of the node found.
+install_packages() {
+    local npm_bin rc
+    find_node || return 1
+    npm_bin="$(dirname "$NODE_BIN")/npm"
+    if [ ! -x "$npm_bin" ]; then
+        echo "stpanel: npm not found next to $NODE_BIN; run npm install in the SillyTavern folder before starting" >&2
+        return 1
+    fi
+    echo -e "\n${CLR_BOLD}Packages changed: npm install${CLR_RESET}"
+    (cd "$ST_DIR" && "$npm_bin" install --no-save --no-audit --no-fund --omit=dev --loglevel=error --no-progress)
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "stpanel: npm install failed (exit $rc); run it in the SillyTavern folder before starting" >&2
+        return 1
+    fi
+}
+
 update_sillytavern() {
-    local rc=0
+    local rc=0 before after
     cls
     echo -e "${CLR_BOLD}${CLR_CYAN}=== Updating SillyTavern (git pull) ===${CLR_RESET}\n"
     if ! command -v git >/dev/null 2>&1; then
@@ -784,11 +803,18 @@ update_sillytavern() {
         echo "stpanel: $ST_DIR is not a git checkout, so it can't be updated with git pull" >&2
         rc=1
     else
+        before=$(git -C "$ST_DIR" rev-parse -q --verify HEAD 2>/dev/null)
         (cd "$ST_DIR" && git pull --rebase --autostash)
         rc=$?
         CACHED_GIT_DATA=""
         CACHED_NET_DATA=""
         rm -f "${ST_DIR}/.git/.last_fetch_check" 2>/dev/null
+        after=$(git -C "$ST_DIR" rev-parse -q --verify HEAD 2>/dev/null)
+        # New packages need installing before the next start, or node crashes on a missing module.
+        if [ "$rc" -eq 0 ] && [ -n "$before" ] && [ "$before" != "$after" ] &&
+            ! git -C "$ST_DIR" diff --quiet "$before" "$after" -- package.json package-lock.json 2>/dev/null; then
+            install_packages || rc=1
+        fi
     fi
     wait_for_enter
     return $rc

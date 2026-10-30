@@ -583,6 +583,104 @@ class StpanelTest {
         assertTrue(r.out + r.err, (r.out + r.err).contains("git"))
     }
 
+    // ---- update with a real git and a fake npm ----
+
+    private val gitEnv = mapOf(
+        "GIT_AUTHOR_NAME" to "t", "GIT_AUTHOR_EMAIL" to "t@example.invalid",
+        "GIT_COMMITTER_NAME" to "t", "GIT_COMMITTER_EMAIL" to "t@example.invalid",
+        "GIT_CONFIG_NOSYSTEM" to "1",
+    )
+
+    private fun git(dir: File, vararg args: String) {
+        val pb = ProcessBuilder(listOf("git") + args).directory(dir).redirectErrorStream(true)
+        pb.environment().putAll(gitEnv)
+        pb.environment()["HOME"] = home.path
+        val p = pb.start()
+        p.outputStream.close()
+        val out = p.inputStream.bufferedReader().readText()
+        assertTrue(p.waitFor(30, TimeUnit.SECONDS))
+        assertEquals("git ${args.joinToString(" ")}: $out", 0, p.exitValue())
+    }
+
+    /** An upstream checkout and stDir cloned from it; returns the upstream folder. */
+    private fun gitCheckout(): File {
+        assumeTrue("update tests need git", runCatching { sh("git", "--version").startsWith("git version") }.getOrDefault(false))
+        val upstream = File(root, "upstream").apply { makeTree(this) }
+        File(upstream, "package.json").writeText("{\"name\": \"sillytavern\", \"version\": \"1.0.0\"}\n")
+        File(upstream, "package-lock.json").writeText("{}\n")
+        git(upstream, "init", "-q")
+        git(upstream, "add", "-A")
+        git(upstream, "commit", "-q", "-m", "one")
+        deleteTree(stDir.toPath())
+        git(root, "clone", "-q", upstream.path, stDir.path)
+        return upstream
+    }
+
+    private fun commitIn(dir: File, file: String, text: String) {
+        File(dir, file).apply { parentFile.mkdirs() }.writeText(text)
+        git(dir, "add", "-A")
+        git(dir, "commit", "-q", "-m", "change $file")
+    }
+
+    private val npmLog get() = File(root, "npm.log")
+
+    /** A fake npm next to the fake node: logs its folder and args, exits with FAKE_NPM_RC. */
+    private fun fakeNpm(dir: File = bin) {
+        File(dir, "npm").apply {
+            writeText("#!/bin/bash\nprintf '%s\\n' \"${'$'}PWD\" \"${'$'}@\" > \"${npmLog.path}\"\nexit ${'$'}{FAKE_NPM_RC:-0}\n")
+            setExecutable(true)
+        }
+    }
+
+    @Test fun updateInstallsPackagesWhenTheyChanged() {
+        val upstream = gitCheckout()
+        fakeNpm()
+        commitIn(upstream, "package.json", "{\"name\": \"sillytavern\", \"version\": \"1.1.0\"}\n")
+        val r = run("update", env = gitEnv)
+        assertEquals(r.out + r.err, 0, r.code)
+        val npm = npmLog.readText().lines()
+        assertEquals(File(stDir.path).canonicalPath, File(npm[0]).canonicalPath)
+        assertEquals("install", npm[1])
+        assertTrue("$npm", npm.containsAll(listOf("--no-audit", "--no-fund", "--omit=dev")))
+    }
+
+    @Test fun updateInstallsPackagesWhenOnlyTheLockFileChanged() {
+        val upstream = gitCheckout()
+        fakeNpm()
+        commitIn(upstream, "package-lock.json", "{\"lockfileVersion\": 3}\n")
+        assertEquals(0, run("update", env = gitEnv).code)
+        assertTrue(npmLog.exists())
+    }
+
+    @Test fun updateSkipsNpmWhenPackagesDidNotChange() {
+        val upstream = gitCheckout()
+        fakeNpm()
+        commitIn(upstream, "public/script.js", "// new\n")
+        val r = run("update", env = gitEnv)
+        assertEquals(r.out + r.err, 0, r.code)
+        assertFalse(npmLog.exists())
+        // Nothing new at all: no npm either.
+        assertEquals(0, run("update", env = gitEnv).code)
+        assertFalse(npmLog.exists())
+    }
+
+    @Test fun updateFailsWhenNpmFails() {
+        val upstream = gitCheckout()
+        fakeNpm()
+        commitIn(upstream, "package.json", "{\"name\": \"sillytavern\", \"version\": \"1.1.0\"}\n")
+        val r = run("update", env = gitEnv + ("FAKE_NPM_RC" to "3"))
+        assertNotEquals(0, r.code)
+        assertTrue(r.err, r.err.contains("stpanel: npm install failed (exit 3)"))
+    }
+
+    @Test fun updateFailsWithoutNpmNextToNode() {
+        val upstream = gitCheckout()
+        commitIn(upstream, "package.json", "{\"name\": \"sillytavern\", \"version\": \"1.1.0\"}\n")
+        val r = run("update", env = gitEnv)
+        assertNotEquals(0, r.code)
+        assertTrue(r.err, r.err.contains("stpanel: npm not found next to"))
+    }
+
     @Test fun helpNamesTheTermuxFolder() {
         val r = run("help")
         assertTrue(r.out, r.out.contains("/data/data/com.termux/files/home/SillyTavern"))
