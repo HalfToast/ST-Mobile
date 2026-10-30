@@ -31,6 +31,11 @@ class AppSettings(private val prefs: SharedPreferences) {
         get() = prefs.getBoolean(KEY_KEEP_ALIVE, true)
         set(value) = prefs.edit().putBoolean(KEY_KEEP_ALIVE, value).apply()
 
+    /** The notification / battery prompts were shown once at startup (Setup and the switch ask again). */
+    var keepAlivePermissionsAsked: Boolean
+        get() = prefs.getBoolean(KEY_KEEP_ALIVE_ASKED, false)
+        set(value) = prefs.edit().putBoolean(KEY_KEEP_ALIVE_ASKED, value).apply()
+
     var setupComplete: Boolean
         get() = prefs.getBoolean(KEY_SETUP_COMPLETE, false)
         set(value) = prefs.edit().putBoolean(KEY_SETUP_COMPLETE, value).apply()
@@ -70,6 +75,7 @@ class AppSettings(private val prefs: SharedPreferences) {
         private const val KEY_SSH_USER = "ssh_user"
         private const val KEY_ST_USER_DIR = "st_user_dir"
         private const val KEY_KEEP_ALIVE = "keep_alive_enabled"
+        private const val KEY_KEEP_ALIVE_ASKED = "keep_alive_permissions_asked"
         private const val KEY_SETUP_COMPLETE = "setup_complete"
         private const val KEY_KNOWN_HOST_KEY = "known_host_key"
         private const val KEY_ST_THEME_JSON = "st_theme_json"

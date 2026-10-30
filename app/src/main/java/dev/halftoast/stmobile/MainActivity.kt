@@ -160,6 +160,11 @@ class MainActivity : ComponentActivity() {
         currentHolder = WeakReference(holder)
         connection = ConnectionMonitor(holder, unreachableProbe, { settings.serverUrl }, lifecycleScope)
         if (settings.keepAliveEnabled) KeepAliveService.start(this) else KeepAliveService.stop(this)
+        // Chat works without SSH setup, which is where these are asked otherwise: ask once here too.
+        if (settings.keepAliveEnabled && !settings.keepAlivePermissionsAsked) {
+            settings.keepAlivePermissionsAsked = true
+            KeepAliveService.requestKeepAlivePermissions(this)
+        }
         lifecycleScope.launch {
             holder.state.collect {
                 if (it == ChatState.LoginRequired) Snapshot.clear(applicationContext)

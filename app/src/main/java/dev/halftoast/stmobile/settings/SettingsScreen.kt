@@ -146,6 +146,7 @@ fun SettingsScreen(
                 Switch(checked = keepAlive, colors = stSwitchColors(), onCheckedChange = {
                     keepAlive = it
                     settings.keepAliveEnabled = it
+                    if (it) activity?.let(KeepAliveService::requestKeepAlivePermissions)
                 })
             }
             StButton("Battery settings", { activity?.let { KeepAliveService.openBatterySettings(it) } }, Modifier.fillMaxWidth())
