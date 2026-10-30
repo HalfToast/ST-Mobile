@@ -9,13 +9,17 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.BeforeClass
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
+import java.security.ProviderException
 import java.security.Security
+import javax.crypto.AEADBadTagException
 import java.util.Base64
 
 class KeyManagerTest {
@@ -63,6 +67,27 @@ class KeyManagerTest {
         val blob = Base64.getDecoder().decode(km.authorizedKeysLine().split(" ")[1])
         val parsed = Buffer.PlainBuffer(blob).readPublicKey()
         assertArrayEquals(km.getOrCreate().public.encoded, parsed.encoded)
+    }
+
+    private class ThrowingWrapper(val error: Exception) : KeyWrapper {
+        override fun wrap(bytes: ByteArray) = FakeWrapper.wrap(bytes)
+        override fun unwrap(bytes: ByteArray): ByteArray = throw error
+    }
+
+    @Test fun aTransientKeystoreErrorKeepsTheKey() {
+        val line = KeyManager(dir, FakeWrapper).authorizedKeysLine()
+        val stored = File(dir, "ssh_key.bin").readBytes()
+        assertThrows(ProviderException::class.java) { KeyManager(dir, ThrowingWrapper(ProviderException("busy"))).getOrCreate() }
+        assertArrayEquals(stored, File(dir, "ssh_key.bin").readBytes())
+        assertEquals(line, KeyManager(dir, FakeWrapper).authorizedKeysLine())
+    }
+
+    @Test fun aLostWrappingKeyMakesANewKeyAndKeepsTheOldFile() {
+        val line = KeyManager(dir, FakeWrapper).authorizedKeysLine()
+        val stored = File(dir, "ssh_key.bin").readBytes()
+        val fresh = KeyManager(dir, ThrowingWrapper(AEADBadTagException("tag mismatch"))).authorizedKeysLine()
+        assertNotEquals(line, fresh)
+        assertArrayEquals(stored, File(dir, "ssh_key.bin.bad").readBytes())
     }
 
     @Test fun sshjSignsWithKeyUnderBouncyCastle() {

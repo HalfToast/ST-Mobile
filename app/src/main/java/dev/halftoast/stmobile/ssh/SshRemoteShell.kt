@@ -68,7 +68,7 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
             idle.begin()
             try {
                 withSshTimeout(timeoutMs) {
-                    val session = openSession()
+                    val (client, session) = openSession()
                     try {
                         runCommand(session, command, stdin)
                     } catch (e: CancellationException) {
@@ -81,7 +81,7 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
                         if (!currentCoroutineContext().isActive && signalOnCancel) session.terminate()
                         currentCoroutineContext().ensureActive()
                         // Otherwise the connection died under us; the next call reconnects.
-                        discard()
+                        discard(client)
                         throw SshError.Unreachable("Lost the connection to the tablet", e)
                     } finally {
                         session.closeQuietly()
@@ -108,7 +108,7 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
     }.flowOn(Dispatchers.IO)
 
     private suspend fun kotlinx.coroutines.channels.ProducerScope<String>.streamLines(command: String) {
-        val session = openSession()
+        val (client, session) = openSession()
         try {
             val c = runInterruptible { session.exec(command) }
             c.outputStream.close()
@@ -120,7 +120,7 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
             }
         } catch (e: IOException) {
             currentCoroutineContext().ensureActive()
-            discard()
+            discard(client)
             throw SshError.Unreachable("Lost the connection to the tablet", e)
         } finally {
             session.terminate()
@@ -163,17 +163,20 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
         ExecResult(cmd.exitStatus, out.toString(Charsets.UTF_8), errBytes.toString(Charsets.UTF_8))
     }
 
-    /** Opens a session, reconnecting once if the cached connection turns out to be dead. */
-    private suspend fun openSession(): Session {
+    /**
+     * Opens a session, reconnecting once if the cached connection turns out to be dead. Returns the
+     * client too: a session that later fails must discard its own connection, never a newer one.
+     */
+    private suspend fun openSession(): Pair<SSHClient, Session> {
         val first = client()
         return try {
-            runInterruptible { first.startSession() }
+            first to runInterruptible { first.startSession() }
         } catch (e: IOException) {
             currentCoroutineContext().ensureActive()
             discard(first)
             val second = client()
             try {
-                runInterruptible { second.startSession() }
+                second to runInterruptible { second.startSession() }
             } catch (e2: IOException) {
                 currentCoroutineContext().ensureActive()
                 discard(second)
@@ -211,14 +214,10 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
         return client
     }
 
-    private suspend fun discard(client: SSHClient? = null) = mutex.withLock {
+    private suspend fun discard(client: SSHClient) = mutex.withLock {
         val current = live
-        if (current != null && (client == null || current.client === client)) {
-            live = null
-            current.client.closeQuietly()
-        } else {
-            client?.closeQuietly()
-        }
+        if (current != null && current.client === client) live = null
+        client.closeQuietly()
     }
 
     private fun drain(input: InputStream) {

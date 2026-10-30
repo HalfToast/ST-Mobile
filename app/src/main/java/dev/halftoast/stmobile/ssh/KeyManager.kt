@@ -1,6 +1,7 @@
 package dev.halftoast.stmobile.ssh
 
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import net.schmizz.sshj.common.Buffer
 import java.io.ByteArrayInputStream
@@ -12,10 +13,12 @@ import java.security.KeyFactory
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.KeyStore
+import java.security.UnrecoverableKeyException
 import java.security.spec.ECGenParameterSpec
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import java.util.Base64
+import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
@@ -40,7 +43,11 @@ class KeyManager(private val filesDir: File, private val wrapper: KeyWrapper) {
     @Synchronized
     fun getOrCreate(): KeyPair {
         cached?.let { return it }
-        val kp = load() ?: create()
+        val kp = load() ?: run {
+            // Kept aside, never overwritten: the tablet still trusts this identity.
+            if (file.exists()) file.renameTo(File(filesDir, "$FILE_NAME.bad"))
+            create()
+        }
         cached = kp
         return kp
     }
@@ -51,13 +58,18 @@ class KeyManager(private val filesDir: File, private val wrapper: KeyWrapper) {
         return "$KEY_TYPE ${Base64.getEncoder().encodeToString(blob)} $COMMENT"
     }
 
-    /** Null if there is no stored key or it can't be unwrapped (e.g. the Keystore key is gone). */
+    /**
+     * Null if there is no stored key or it can never be unwrapped (the Keystore key is gone or the
+     * file is corrupt). Throws on anything else, e.g. a transient Keystore error: the call fails and
+     * is retried later, rather than replacing the identity the tablet trusts.
+     */
     private fun load(): KeyPair? {
         if (!file.exists()) return null
         val plain = try {
             wrapper.unwrap(file.readBytes())
-        } catch (_: Exception) {
-            return null
+        } catch (e: Exception) {
+            if (isPermanent(e)) return null
+            throw e
         }
         return try {
             decode(plain)
@@ -114,6 +126,10 @@ class KeyManager(private val filesDir: File, private val wrapper: KeyWrapper) {
             priv.fill(0)
         }
     }
+
+    private fun isPermanent(e: Exception) =
+        e is AEADBadTagException || e is KeyPermanentlyInvalidatedException || e is UnrecoverableKeyException ||
+            e is IndexOutOfBoundsException || e is IllegalArgumentException // a truncated or garbled file
 
     companion object {
         const val FILE_NAME = "ssh_key.bin"
