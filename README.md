@@ -341,7 +341,8 @@ Environment variables:
 - `STPANEL_REFRESH`: seconds between refreshes of the interactive panel (default 5).
 
 stpanel only ever looks up and stops the SillyTavern in its own folder: the process in its pid file, and
-`node` processes running that folder's `server.js` or started from that folder. Other Node apps on the machine are left alone. It
+`node` processes running that folder's `server.js` (by its full path, or as `server.js` started from that
+folder). Other Node apps on the machine are left alone. It
 starts SillyTavern as `node server.js`, without `npm install`: run `./start.sh` once after cloning, and
 again after an update that changes SillyTavern's packages.
 

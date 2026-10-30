@@ -153,7 +153,8 @@ class ProbeScriptsTest {
         val other = File(root, "Other/SillyTavern").apply { mkdirs() }
         File(other, "server.js").writeText("// fake\n")
         launchNode(other, "--max-old-space-size=2048", "server.js")
-        val elsewhere = launchNode(root, "--max-old-space-size=2048", File(other, "server.js").path)
+        // Started from this folder, but with another folder's absolute server.js: not ours.
+        val elsewhere = launchNode(stDir, "--max-old-space-size=2048", File(other, "server.js").path)
         // A pid file naming a process that isn't this folder's server.
         File(stDir, "sillytavern.pid").writeText("$elsewhere\n")
         val d = dashboard()

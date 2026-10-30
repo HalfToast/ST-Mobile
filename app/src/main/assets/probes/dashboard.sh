@@ -38,7 +38,7 @@ WATCHDOG_TEXT="Watchdog reviving in 2 seconds"
 # ---- processes: verbatim twins of server/stpanel's pid_alive … pidfile_pid and get_port
 # (ScriptTwinsTest checks them); get_sillytavern_pid is this script's own, the same lookup.
 # Only this folder's server counts: the pid file's process if it is one, else a node process
-# (argv[0] node) running <ST_DIR>/server.js or started from <ST_DIR>.
+# (argv[0] node) running <ST_DIR>/server.js, or a relative server.js started from <ST_DIR>.
 
 # Alive and not a zombie.
 pid_alive() {
@@ -100,9 +100,11 @@ candidate_pids() {
     fi
 }
 
-# A node process serving this folder's server.js (never a supervisor loop).
+# A node process serving this folder's server.js (never a supervisor loop): one given
+# <ST_DIR>/server.js, or one given server.js or ./server.js and running in <ST_DIR>. Any other
+# path to a server.js (another folder's, absolute or not) is not ours, whatever the cwd.
 is_st_server() {
-    local args argv0 cwd d
+    local args argv0 cwd d w words relative=0
     argv0=$(proc_argv0 "$1")
     case "${argv0##*/}" in
         node|nodejs) ;;
@@ -119,6 +121,15 @@ is_st_server() {
             *" $d/server.js "*) return 0 ;;
         esac
     done
+    # Word by word, without globbing.
+    read -r -a words <<< "$args"
+    for w in "${words[@]}"; do
+        case "$w" in
+            server.js|./server.js) relative=1 ;;
+            *server.js) return 1 ;;
+        esac
+    done
+    [ "$relative" = 1 ] || return 1
     cwd=$(proc_cwd "$1")
     [ -n "$cwd" ] && { [ "$cwd" = "$ST_DIR" ] || [ "$cwd" = "$ST_DIR_REAL" ]; }
 }

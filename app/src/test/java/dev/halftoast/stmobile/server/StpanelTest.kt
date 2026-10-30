@@ -256,16 +256,30 @@ class StpanelTest {
         assertTrue(p.waitFor(10, TimeUnit.SECONDS))
     }
 
+    /**
+     * Another folder's server, started from its own folder or from this one with its absolute
+     * server.js path, is not ours: an absolute server.js other than this folder's wins over the cwd.
+     */
     @Test fun leavesServersOfOtherFoldersAlone() {
         val other = File(root, "Other/SillyTavern").apply { makeTree(this) }
-        val (p, _) = launchDirectly(other, "--max-old-space-size=2048", "server.js")
-        val (q, _) = launchDirectly(root, "--max-old-space-size=2048", File(other, "server.js").path)
-        waitUntil("node.args") { File(other, "node.args").exists() }
+        val (p, pPid) = launchDirectly(other, "--max-old-space-size=2048", "server.js")
+        val (q, qPid) = launchDirectly(stDir, "--max-old-space-size=2048", File(other, "server.js").path)
+        waitUntil("both nodes") { isNode(pPid) && isNode(qPid) }
         val status = run("status")
         assertTrue(status.out, status.out.contains("OFFLINE"))
         assertEquals(0, run("stop").code)
         assertTrue(p.isAlive)
         assertTrue(q.isAlive)
+    }
+
+    /** A node started from this folder with a relative server.js is this folder's server. */
+    @Test fun findsAServerStartedHereWithARelativeServerJs() {
+        val (p, pid) = launchDirectly(stDir, "./server.js")
+        waitUntil("node") { isNode(pid) }
+        val status = run("status")
+        assertTrue(status.out, status.out.contains("PID: $pid"))
+        assertEquals(0, run("stop").code)
+        assertTrue(p.waitFor(10, TimeUnit.SECONDS))
     }
 
     @Test fun restartLeavesExactlyOneServer() {
