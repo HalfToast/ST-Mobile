@@ -38,18 +38,24 @@ enum class ConnectFailure { Refused, Timeout, Unreachable, Other }
  * connects to any 100.x address with Tailscale off.
  */
 enum class ServerAnswer {
-    /** SillyTavern: its version JSON, or its redirect to the login page (no session yet). */
+    /** SillyTavern: its version JSON. */
     SillyTavern,
+    /** A redirect to /login on the server's own origin: ST without a session (trusted only through the VPN). */
+    LoginRedirect,
     /** 401/403: ST's auth or whitelist (trusted only through the VPN). */
     AuthRequired,
     /** No answer, or one that isn't ST's (timeout, HTML, garbage, another status). */
     None,
 }
 
-/** Reads a `/version` response: status [code], its `Location` header and (for a 200) its [body]. */
-fun serverAnswerOf(code: Int, location: String?, body: String?): ServerAnswer = when {
+/**
+ * Reads [serverUrl]'s `/version` response: status [code], its `Location` header and (for a 200) its
+ * [body]. A redirect counts only to `/login` on the server's own scheme, host and port: a captive
+ * portal's login page is not ST's.
+ */
+fun serverAnswerOf(code: Int, location: String?, body: String?, serverUrl: String): ServerAnswer = when {
     code == 200 && body != null && looksLikeStVersion(body) -> ServerAnswer.SillyTavern
-    code in 300..399 && location != null && isLoginLocation(location) -> ServerAnswer.SillyTavern
+    code in 300..399 && location != null && isOwnLogin(location, serverUrl) -> ServerAnswer.LoginRedirect
     code == 401 || code == 403 -> ServerAnswer.AuthRequired
     else -> ServerAnswer.None
 }
@@ -62,20 +68,28 @@ fun looksLikeStVersion(body: String): Boolean = try {
     false
 }
 
-private fun isLoginLocation(location: String): Boolean = try {
-    (URI(location.trim()).path ?: "").startsWith("/login")
+/** [location], resolved against [serverUrl], is `/login…` on the same scheme, host and port. */
+private fun isOwnLogin(location: String, serverUrl: String): Boolean = try {
+    val server = URI(serverUrl.trim())
+    val target = server.resolve(location.trim())
+    fun port(u: URI) = if (u.port >= 0) u.port else if (u.scheme.equals("https", ignoreCase = true)) 443 else 80
+    target.scheme.equals(server.scheme, ignoreCase = true) &&
+        target.host != null && target.host.equals(server.host, ignoreCase = true) &&
+        port(target) == port(server) &&
+        (target.path ?: "").startsWith("/login")
 } catch (_: Exception) {
     false
 }
 
 /**
- * Whether ST can be reached, from a probe: null when SillyTavern itself answered, else why not.
+ * Whether ST can be reached, from a probe: null when SillyTavern itself answered (its version JSON;
+ * its own login redirect or a 401/403 only with the VPN up), else why not.
  * [connect] (a TCP connect, null if it connected or wasn't tried) only tells a refused port (ST not
  * running) from silence; it never proves reachability.
  */
 fun connectionVerdict(vpnUp: Boolean, answer: ServerAnswer, connect: ConnectFailure?): UnreachableCase? = when {
     answer == ServerAnswer.SillyTavern -> null
-    answer == ServerAnswer.AuthRequired && vpnUp -> null
+    (answer == ServerAnswer.AuthRequired || answer == ServerAnswer.LoginRedirect) && vpnUp -> null
     !vpnUp -> UnreachableCase.TailscaleOff
     connect == ConnectFailure.Refused -> UnreachableCase.ServerNotRunning
     else -> UnreachableCase.TabletNotAnswering
@@ -196,7 +210,7 @@ class UnreachableProbe(context: Context) {
             val body = if (code == 200) {
                 conn.inputStream.use { stream -> readAtMost(stream, MAX_VERSION_BYTES) }?.toString(Charsets.UTF_8)
             } else null
-            serverAnswerOf(code, conn.getHeaderField("Location"), body)
+            serverAnswerOf(code, conn.getHeaderField("Location"), body, serverUrl)
         } catch (_: Exception) {
             ServerAnswer.None
         } finally {

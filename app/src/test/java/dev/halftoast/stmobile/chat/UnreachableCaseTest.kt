@@ -9,6 +9,7 @@ import java.net.UnknownHostException
 
 class UnreachableCaseTest {
     private val silent = ServerAnswer.None
+    private val SERVER = "http://100.101.102.103:8000/"
 
     @Test fun noVpnMeansTailscaleIsOffEvenIfTcpConnects() {
         // A carrier's CGNAT accepts TCP to any 100.x address: a bare connect proves nothing.
@@ -35,6 +36,9 @@ class UnreachableCaseTest {
         // ST itself answered: reachable, VPN or not (a server on the LAN).
         assertEquals(null, connectionVerdict(vpnUp = true, answer = ServerAnswer.SillyTavern, connect = null))
         assertEquals(null, connectionVerdict(vpnUp = false, answer = ServerAnswer.SillyTavern, connect = null))
+        // ST's own login redirect counts only through the VPN, like a 401/403.
+        assertEquals(null, connectionVerdict(vpnUp = true, answer = ServerAnswer.LoginRedirect, connect = null))
+        assertEquals(UnreachableCase.TailscaleOff, connectionVerdict(vpnUp = false, answer = ServerAnswer.LoginRedirect, connect = null))
         // A 401/403 counts only through the VPN (it is ST's auth or whitelist, not a carrier box).
         assertEquals(null, connectionVerdict(vpnUp = true, answer = ServerAnswer.AuthRequired, connect = null))
         assertEquals(UnreachableCase.TailscaleOff, connectionVerdict(vpnUp = false, answer = ServerAnswer.AuthRequired, connect = null))
@@ -44,22 +48,36 @@ class UnreachableCaseTest {
 
     @Test fun whatAnsweredVersion() {
         val st = """{"agent":"SillyTavern:1.19.0:Cohee#1207","pkgVersion":"1.19.0","gitRevision":"ad29cbda6","gitBranch":"staging"}"""
-        assertEquals(ServerAnswer.SillyTavern, serverAnswerOf(200, null, st))
-        assertEquals(ServerAnswer.SillyTavern, serverAnswerOf(200, null, """{"pkgVersion":"1.12.0"}"""))
-        assertEquals(ServerAnswer.None, serverAnswerOf(200, null, "<!doctype html><html>Welcome to your carrier</html>"))
-        assertEquals(ServerAnswer.None, serverAnswerOf(200, null, ""))
-        assertEquals(ServerAnswer.None, serverAnswerOf(200, null, null))
-        assertEquals(ServerAnswer.None, serverAnswerOf(200, null, "\u0000garbage{"))
-        assertEquals(ServerAnswer.None, serverAnswerOf(200, null, """{"status":"ok"}"""))
-        assertEquals(ServerAnswer.None, serverAnswerOf(200, null, """{"pkgVersion":""}"""))
-        assertEquals(ServerAnswer.None, serverAnswerOf(500, null, st))
-        // No session yet: ST sends the page to its login.
-        assertEquals(ServerAnswer.SillyTavern, serverAnswerOf(302, "/login", null))
-        assertEquals(ServerAnswer.SillyTavern, serverAnswerOf(302, "http://100.101.102.103:8000/login?next=/", null))
-        assertEquals(ServerAnswer.None, serverAnswerOf(302, "http://portal.carrier.example/", null))
-        assertEquals(ServerAnswer.AuthRequired, serverAnswerOf(401, null, null))
-        assertEquals(ServerAnswer.AuthRequired, serverAnswerOf(403, null, "Forbidden"))
-        assertEquals(ServerAnswer.None, serverAnswerOf(-1, null, null))
+        assertEquals(ServerAnswer.SillyTavern, serverAnswerOf(200, null, st, SERVER))
+        assertEquals(ServerAnswer.SillyTavern, serverAnswerOf(200, null, """{"pkgVersion":"1.12.0"}""", SERVER))
+        assertEquals(ServerAnswer.None, serverAnswerOf(200, null, "<!doctype html><html>Welcome to your carrier</html>", SERVER))
+        assertEquals(ServerAnswer.None, serverAnswerOf(200, null, "", SERVER))
+        assertEquals(ServerAnswer.None, serverAnswerOf(200, null, null, SERVER))
+        assertEquals(ServerAnswer.None, serverAnswerOf(200, null, "\u0000garbage{", SERVER))
+        assertEquals(ServerAnswer.None, serverAnswerOf(200, null, """{"status":"ok"}""", SERVER))
+        assertEquals(ServerAnswer.None, serverAnswerOf(200, null, """{"pkgVersion":""}""", SERVER))
+        assertEquals(ServerAnswer.None, serverAnswerOf(500, null, st, SERVER))
+        // No session yet: ST sends the page to its own login, on its own origin.
+        assertEquals(ServerAnswer.LoginRedirect, serverAnswerOf(302, "/login", null, SERVER))
+        assertEquals(ServerAnswer.LoginRedirect, serverAnswerOf(302, "http://100.101.102.103:8000/login?next=/", null, SERVER))
+        assertEquals(ServerAnswer.LoginRedirect, serverAnswerOf(302, "HTTP://100.101.102.103:8000/login", null, SERVER))
+        // A captive portal's own login page is not ST's.
+        assertEquals(ServerAnswer.None, serverAnswerOf(302, "http://portal.carrier.example/login", null, SERVER))
+        assertEquals(ServerAnswer.None, serverAnswerOf(302, "https://100.101.102.103:8000/login", null, SERVER))
+        assertEquals(ServerAnswer.None, serverAnswerOf(302, "http://100.101.102.103:9000/login", null, SERVER))
+        assertEquals(ServerAnswer.None, serverAnswerOf(302, "//portal.carrier.example/login", null, SERVER))
+        assertEquals(ServerAnswer.None, serverAnswerOf(302, "http://portal.carrier.example/", null, SERVER))
+        assertEquals(ServerAnswer.LoginRedirect, serverAnswerOf(302, "http://tablet.ts.net/login", null, "http://tablet.ts.net"))
+        // End to end: a relative /login counts as ST through the VPN only; a portal's /login never.
+        assertEquals(null, connectionVerdict(true, serverAnswerOf(302, "/login", null, SERVER), null))
+        assertEquals(UnreachableCase.TailscaleOff, connectionVerdict(false, serverAnswerOf(302, "/login", null, SERVER), null))
+        assertEquals(
+            UnreachableCase.TabletNotAnswering,
+            connectionVerdict(true, serverAnswerOf(302, "http://portal.carrier.example/login", null, SERVER), null),
+        )
+        assertEquals(ServerAnswer.AuthRequired, serverAnswerOf(401, null, null, SERVER))
+        assertEquals(ServerAnswer.AuthRequired, serverAnswerOf(403, null, "Forbidden", SERVER))
+        assertEquals(ServerAnswer.None, serverAnswerOf(-1, null, null, SERVER))
     }
 
     @Test fun failuresFromSocketExceptions() {
