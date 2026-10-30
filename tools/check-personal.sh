@@ -13,20 +13,16 @@ set -eu
 cd "$(dirname "$0")/.."
 
 allow=tools/check-personal.allow
-pattern='100\.101\.102\.103|u0_a123|<serial>|phone|HyperOS|MIUI|HalfToast'"'"'s|Seraphina|Aria|Ezra|Ruling [0-9]|Tailscale'
+# The author's addresses (server and whitelisted devices), Termux user, adb serial, phone model and
+# its token in a user agent, names from a chat, the old process ledger, then words allowed only in places.
+pattern='100\.101\.102\.103|100\.101\.102\.105|100\.101\.102\.104|100\.101\.102\.106|u0_a123|<serial>'
+pattern+='|HyperOS|MIUI|HalfToast'"'"'s|Seraphina|Aria|Ezra|Ruling [0-9]|Tailscale'
 exclude=(':!tools/check-personal.sh' ":!$allow")
 
 hits=$( {
     git grep -n -I -E "$pattern" -- . "${exclude[@]}" || true
     git grep -n -I -i -E 'tablet' -- . "${exclude[@]}" || true
 } | sort -u -t: -k1,1 -k2,2n )
-
-if [ -z "$hits" ]; then
-    echo "No hits."
-    exit 0
-fi
-
-[ -f "$allow" ] || : > "$allow"
 
 printf '%s\n' "$hits" | awk -v allowfile="$allow" '
 BEGIN {
@@ -39,19 +35,21 @@ BEGIN {
         sub(/[ \t]+$/, "", entry); sub(/^[ \t]+/, "", reason)
         c = index(entry, ":")
         if (c == 0) { print "allowlist entry without \"path:regex\": " line > "/dev/stderr"; bad_entries++; continue }
-        n++; path[n] = substr(entry, 1, c - 1); re[n] = substr(entry, c + 1); why[n] = reason
+        n++; path[n] = substr(entry, 1, c - 1); re[n] = substr(entry, c + 1); why[n] = reason; used[n] = 0
     }
     close(allowfile)
 }
+$0 == "" { next }
 {
     c1 = index($0, ":"); file = substr($0, 1, c1 - 1)
     rest = substr($0, c1 + 1); c2 = index(rest, ":"); text = substr(rest, c2 + 1)
     ok = 0
     for (i = 1; i <= n; i++) if (path[i] == file && text ~ re[i]) { ok = i; break }
-    if (ok) { allowed++; print $0; print "    allowed: " why[ok] }
+    if (ok) { allowed++; used[ok] = 1; print $0; print "    allowed: " why[ok] }
     else { denied++; print $0; print "    NOT ALLOWED" }
 }
 END {
+    for (i = 1; i <= n; i++) if (!used[i]) printf "warning: allowlist entry matched nothing: %s:%s\n", path[i], re[i]
     printf "\n%d hit(s): %d allowed, %d not allowed.\n", allowed + denied, allowed, denied
     exit (denied > 0 || bad_entries > 0) ? 1 : 0
 }'

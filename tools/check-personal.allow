@@ -4,7 +4,7 @@
 # Tailscale as one VPN option
 README.md:a VPN such as Tailscale # Tailscale named as one VPN option
 README.md:^such as Tailscale, or another # Tailscale named as one VPN option
-server/stpanel:Tailscale # stpanel lists a Tailscale address as one way to reach the server, next to Wi-Fi
+server/stpanel:Tailscale/VPN|Tailscale VPN:|\| Tailscale: http|Wi-Fi, Tailscale\) # stpanel lists a Tailscale address as one way to reach the server, next to Wi-Fi
 
 # The Tailscale-address rule (100.64.0.0/10, fd7a:115c:a1e0::/48, *.ts.net), its messages, its button and their tests
 app/src/main/AndroidManifest.xml:"Open Tailscale" # the Open Tailscale button needs to see Tailscale's package
@@ -12,7 +12,7 @@ app/src/main/java/dev/halftoast/stmobile/MainActivity.kt:Tailscale # the Tailsca
 app/src/main/java/dev/halftoast/stmobile/chat/ConnectionMonitor.kt:Tailscale # the VPN is watched only for a Tailscale address
 app/src/main/java/dev/halftoast/stmobile/chat/ConnectionWatch.kt:Tailscale # the VPN going down covers the chat only for a Tailscale address
 app/src/main/java/dev/halftoast/stmobile/chat/UnreachableCase.kt:Tailscale # the Tailscale-address rule and the "Tailscale is off" case
-app/src/main/java/dev/halftoast/stmobile/chat/UnreachableScreen.kt:Tailscale # the Tailscale-only messages and the Open Tailscale button
+app/src/main/java/dev/halftoast/stmobile/chat/UnreachableScreen.kt:isTailscaleServer|onOpenTailscale|TailscaleOff|[oO]pen Tailscale|With Tailscale off|signed out of Tailscale # the Tailscale-only messages and the Open Tailscale button
 app/src/test/java/dev/halftoast/stmobile/chat/ConnectionWatchTest.kt:Tailscale # tests of the Tailscale-address rule
 app/src/test/java/dev/halftoast/stmobile/chat/UnreachableCaseTest.kt:Tailscale # tests of the Tailscale-address rule
 
