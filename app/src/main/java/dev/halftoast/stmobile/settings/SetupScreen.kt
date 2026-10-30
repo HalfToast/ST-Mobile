@@ -124,6 +124,9 @@ fun SetupScreen(
         val f = form
         scope.launch {
             var keyStage = false
+            var done = false
+            // Saved up front (the key-login test reads them), so put back if setup fails or is left.
+            val before = SshFields.of(settings)
             try {
                 f.saveSsh(settings)
                 val line = withContext(Dispatchers.IO) { keys.authorizedKeysLine() }
@@ -136,6 +139,7 @@ fun SetupScreen(
                 val urlChanged = f.saveServerUrl(settings)
                 settings.setupComplete = true
                 Log.i(StMobileApp.LOG_TAG, "ssh: setup complete, host key $seen")
+                done = true
                 busy = false
                 activity?.let { KeepAliveService.requestKeepAlivePermissions(it) }
                 onComplete(urlChanged)
@@ -148,6 +152,7 @@ fun SetupScreen(
                 busy = false
             } finally {
                 pw.fill('\u0000')
+                if (!done) before.restore(settings)
             }
         }
     }
@@ -287,3 +292,18 @@ internal val ConnectionFormSaver = listSaver<ConnectionForm, String>(
     save = { listOf(it.serverUrl, it.host, it.port, it.user, it.stUserDir) },
     restore = { ConnectionForm(it[0], it[1], it[2], it[3], it[4]) },
 )
+
+/** The SSH settings [ConnectionForm.saveSsh] writes, with the host key pin it may clear. */
+private data class SshFields(val host: String, val port: Int, val user: String, val stUserDir: String, val hostKey: String?) {
+    fun restore(settings: AppSettings) {
+        settings.sshHost = host
+        settings.sshPort = port
+        settings.sshUser = user
+        settings.stUserDir = stUserDir
+        settings.knownHostKey = hostKey
+    }
+
+    companion object {
+        fun of(s: AppSettings) = SshFields(s.sshHost, s.sshPort, s.sshUser, s.stUserDir, s.knownHostKey)
+    }
+}
