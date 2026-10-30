@@ -43,3 +43,6 @@ val ChatState.isLiveServerPage: Boolean
  */
 val ChatState.coversOnConnectionLoss: Boolean
     get() = this == ChatState.Ready || this == ChatState.LoginRequired || this == ChatState.Stalled
+
+/** The Loading pill: a first load connects; once a page from this server was live, it reconnects. */
+fun loadingPillText(pageWasLive: Boolean): String = if (pageWasLive) "Reconnecting…" else "Connecting…"

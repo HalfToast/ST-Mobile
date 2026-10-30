@@ -1,15 +1,16 @@
 package dev.halftoast.stmobile.chat
 
 /**
- * The connection dropping under a loaded chat (Tailscale off, tablet asleep, server stopped). Pure
+ * The connection dropping under a loaded chat (Tailscale off, server asleep, ST stopped). Pure
  * decisions; [ConnectionMonitor] feeds it events and carries out what it returns.
  *
- * - The phone's VPN going down while the page is live covers it at once (TailscaleOff).
+ * - For a Tailscale server, the phone's VPN going down while the page is live covers it at once
+ *   (TailscaleOff). For any other server the VPN means nothing.
  * - A network failure of one of ST's own requests probes the server (at most every
  *   [FAILURE_PROBE_GAP_MS]; a failure within the gap is probed when it ends); a probe that can't reach
  *   it covers with the matching case, a probe that can is a one-off and changes nothing.
- * - While covered: the VPN coming back, a Retry or a periodic tick probes; once the server answers,
- *   the cover goes. If any of ST's requests failed during the outage, or ST's port was refused (its
+ * - While covered: the VPN coming back (Tailscale server), a Retry or a periodic tick probes; once
+ *   the server answers, the cover goes. If any of ST's requests failed during the outage, or ST's port was refused (its
  *   process was gone), the page reloads (as ST asks); otherwise it is just uncovered, exactly as it was.
  * - A reload, or the page leaving the live states, forgets the outage ([onPageReset]).
  *
@@ -40,8 +41,15 @@ class ConnectionWatch(private val now: () -> Long) {
     private var probingForFailure = false
     private var deferredProbePending = false
 
-    /** The VPN was reported [up] or down. The first report is only the starting point. */
-    fun onVpn(up: Boolean, pageLive: Boolean): Decision {
+    /**
+     * The VPN was reported [up] or down. The first report is only the starting point. Ignored unless
+     * the server is a [tailscaleHost]; then the next report for one is a starting point again.
+     */
+    fun onVpn(up: Boolean, pageLive: Boolean, tailscaleHost: Boolean): Decision {
+        if (!tailscaleHost) {
+            vpnUp = null
+            return Decision.None
+        }
         val before = vpnUp
         vpnUp = up
         return when {

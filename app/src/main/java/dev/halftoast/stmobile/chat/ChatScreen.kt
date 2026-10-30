@@ -59,9 +59,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import dev.halftoast.stmobile.ui.LocalStPalette
 
 /**
- * The chat WebView with its state overlays: a "Reconnecting…" pill (over the last snapshot, which
- * swallows taps) while Loading, a "Still loading… Retry" pill while Stalled, [unreachable] over
- * everything while Unreachable, and [covered] over a loaded page whose connection was lost. The overlays are small layers over the WebView; nothing here resizes
+ * The chat WebView with its state overlays: a "Connecting…" or "Reconnecting…" pill (over the last
+ * snapshot, which swallows taps) while Loading ([loadingPillText]), a "Still loading… Retry" pill
+ * while Stalled, [unreachable] over everything while Unreachable, and [covered] over a loaded page
+ * whose connection was lost. The overlays are small layers over the WebView; nothing here resizes
  * or re-composites it.
  */
 @Composable
@@ -73,6 +74,7 @@ fun ChatScreen(
 ) {
     val state by holder.state.collectAsState()
     val cover by holder.cover.collectAsState()
+    val pageWasLive by holder.pageWasLive.collectAsState()
     val context = LocalContext.current
     // Decoded off the main thread, only while Loading (so it is the latest save, and a full-screen
     // bitmap isn't held while the chat is up); dropped at once whenever the snapshot is cleared.
@@ -112,7 +114,7 @@ fun ChatScreen(
                         )
                     }
                 }
-                StatusPill("Reconnecting…", pillPlace)
+                StatusPill(loadingPillText(pageWasLive), pillPlace)
             }
             ChatState.Stalled -> StatusPill("Still loading…", pillPlace) {
                 val press = remember { MutableInteractionSource() }

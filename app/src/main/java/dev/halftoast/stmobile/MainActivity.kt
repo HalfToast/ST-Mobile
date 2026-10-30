@@ -70,6 +70,7 @@ import dev.halftoast.stmobile.chat.UnreachableScreen
 import dev.halftoast.stmobile.chat.WebViewHolder
 import dev.halftoast.stmobile.chat.backProbesPage
 import dev.halftoast.stmobile.chat.isLiveServerPage
+import dev.halftoast.stmobile.chat.isTailscaleServer
 import dev.halftoast.stmobile.chat.reloadWhenServerBack
 import dev.halftoast.stmobile.keepalive.KeepAliveService
 import dev.halftoast.stmobile.logs.LogsScreen
@@ -223,6 +224,7 @@ class MainActivity : ComponentActivity() {
                 val unreachableActions = remember {
                     UnreachableActions(
                         classify = { unreachableProbe.classify(settings.serverUrl) },
+                        tailscaleHost = { isTailscaleServer(settings.serverUrl) },
                         vpnUp = unreachableProbe::vpnUp,
                         watchVpn = unreachableProbe::watchVpn,
                         onRetry = holder::retry,
@@ -246,6 +248,7 @@ class MainActivity : ComponentActivity() {
                 val coverActions = remember {
                     UnreachableActions(
                         classify = unreachableActions.classify,
+                        tailscaleHost = unreachableActions.tailscaleHost,
                         vpnUp = unreachableActions.vpnUp,
                         watchVpn = unreachableActions.watchVpn,
                         onRetry = connection::retry,

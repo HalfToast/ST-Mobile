@@ -12,7 +12,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
- * Carries out [ConnectionWatch] for the live Chat: watches the phone's VPN and the page's failed
+ * Carries out [ConnectionWatch] for the live Chat: watches the phone's VPN (only for a Tailscale
+ * server, re-checked whenever the page reloads, as it does for a new address) and the page's failed
  * requests, probes the server off the main thread (real ST must answer /version, see [UnreachableProbe.check]), and covers, uncovers or reloads through [holder].
  * Runs only between [start] and [stop] (the Activity's foreground): no callback or probe loop in the
  * background; [start] picks up whatever changed meanwhile. [scope] runs on the main thread.
@@ -44,6 +45,8 @@ class ConnectionMonitor(
                     watch.onPageReset()
                     stopTicker()
                 }
+                // A new address reloads the page: watch the VPN only if it is a Tailscale one.
+                syncVpnWatch()
             }
         }
     }
@@ -51,8 +54,7 @@ class ConnectionMonitor(
     fun start() {
         if (started) return
         started = true
-        // The first report is the VPN as it is now; a change since stop() still counts.
-        stopVpnWatch = probe.watchVpn { up -> scope.launch { handle(watch.onVpn(up, live())) } }
+        syncVpnWatch()
         if (watch.cover != null) {
             startTicker()
             handle(Decision.Probe)
@@ -64,8 +66,7 @@ class ConnectionMonitor(
 
     fun stop() {
         started = false
-        stopVpnWatch?.invoke()
-        stopVpnWatch = null
+        syncVpnWatch()
         stopTicker()
         deferred?.cancel()
         deferred = null
@@ -83,6 +84,23 @@ class ConnectionMonitor(
     fun retry() = handle(watch.onRetry())
 
     private fun live() = holder.state.value.coversOnConnectionLoss
+
+    private fun tailscaleHost() = isTailscaleServer(serverUrl())
+
+    /**
+     * The VPN is watched exactly while started and the server is a Tailscale address. The first report
+     * is the VPN as it is now; a change since stop() still counts.
+     */
+    private fun syncVpnWatch() {
+        val want = started && tailscaleHost()
+        if (want == (stopVpnWatch != null)) return
+        if (want) {
+            stopVpnWatch = probe.watchVpn { up -> scope.launch { handle(watch.onVpn(up, live(), tailscaleHost())) } }
+        } else {
+            stopVpnWatch?.invoke()
+            stopVpnWatch = null
+        }
+    }
 
     private fun handle(decision: Decision) {
         when (decision) {

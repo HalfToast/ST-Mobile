@@ -191,13 +191,15 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
 
     private suspend fun client(): SSHClient = mutex.withLock {
         val target = Target(settings.sshHost, settings.sshPort, settings.sshUser)
-        // A blank host would make sshj connect to this phone itself and report the server unreachable.
-        if (!AppSettings.isSshConfigured(target.host, target.user)) throw SshError.NotSetUp()
+        val configured = AppSettings.isSshConfigured(target.host, target.user)
         live?.let {
-            if (it.target == target && it.client.isConnected && it.client.isAuthenticated) return it.client
+            if (configured && it.target == target && it.client.isConnected && it.client.isAuthenticated) return it.client
+            // Stale, dead, or SSH was cleared: never leave the old connection open.
             it.client.closeQuietly()
             live = null
         }
+        // A blank host would make sshj connect to this phone itself and report the server unreachable.
+        if (!configured) throw SshError.NotSetUp()
         val client = runInterruptible { connect(target) }
         live = Live(target, client)
         client

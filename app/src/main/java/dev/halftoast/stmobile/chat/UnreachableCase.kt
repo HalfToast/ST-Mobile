@@ -20,12 +20,12 @@ import java.net.URL
 
 /** Why Chat can't reach SillyTavern, as far as the phone can tell. Picks the Unreachable screen's words and buttons. */
 enum class UnreachableCase {
-    /** No VPN on the phone: Tailscale (HalfToast's VPN) is off. */
+    /** A Tailscale server and no VPN on the phone: Tailscale is off. */
     TailscaleOff,
-    /** The tablet answered but refused ST's port: ST isn't running. */
+    /** The server answered but refused ST's port: ST isn't running. */
     ServerNotRunning,
-    /** No answer at all with the VPN up: asleep, or signed out of Tailscale. */
-    TabletNotAnswering,
+    /** No answer at all (with the VPN up, for a Tailscale server): off, asleep, or signed out of Tailscale. */
+    ServerNotAnswering,
     /** SillyTavern itself answers; the page failed for another reason (shown as the plain reason). */
     Other,
 }
@@ -34,15 +34,15 @@ enum class UnreachableCase {
 enum class ConnectFailure { Refused, Timeout, Unreachable, Other }
 
 /**
- * What answered `GET <server>/version`. A bare TCP connect proves nothing: a carrier's CGNAT accepts
- * connects to any 100.x address with Tailscale off.
+ * What answered `GET <server>/version`. For a Tailscale server a bare TCP connect proves nothing: a
+ * carrier's CGNAT accepts connects to any 100.x address with Tailscale off.
  */
 enum class ServerAnswer {
     /** SillyTavern: its version JSON. */
     SillyTavern,
-    /** A redirect to /login on the server's own origin: ST without a session (trusted only through the VPN). */
+    /** A redirect to /login on the server's own origin: ST without a session (for a Tailscale server, trusted only through the VPN). */
     LoginRedirect,
-    /** 401/403: ST's auth or whitelist (trusted only through the VPN). */
+    /** 401/403: ST's auth or whitelist (for a Tailscale server, trusted only through the VPN). */
     AuthRequired,
     /** No answer, or one that isn't ST's (timeout, HTML, garbage, another status). */
     None,
@@ -83,21 +83,63 @@ private fun isOwnLogin(location: String, serverUrl: String): Boolean = try {
 
 /**
  * Whether ST can be reached, from a probe: null when SillyTavern itself answered (its version JSON;
- * its own login redirect or a 401/403 only with the VPN up), else why not.
+ * its own login redirect or a 401/403, which for a [tailscaleHost] count only with the VPN up), else
+ * why not. Only a [tailscaleHost] is blamed on the phone's VPN being down.
  * [connect] (a TCP connect, null if it connected or wasn't tried) only tells a refused port (ST not
  * running) from silence; it never proves reachability.
  */
-fun connectionVerdict(vpnUp: Boolean, answer: ServerAnswer, connect: ConnectFailure?): UnreachableCase? = when {
-    answer == ServerAnswer.SillyTavern -> null
-    (answer == ServerAnswer.AuthRequired || answer == ServerAnswer.LoginRedirect) && vpnUp -> null
-    !vpnUp -> UnreachableCase.TailscaleOff
-    connect == ConnectFailure.Refused -> UnreachableCase.ServerNotRunning
-    else -> UnreachableCase.TabletNotAnswering
+fun connectionVerdict(vpnUp: Boolean, answer: ServerAnswer, connect: ConnectFailure?, tailscaleHost: Boolean): UnreachableCase? {
+    // Off Tailscale, a 100.x answer may be a carrier box; any other server's answer is its own.
+    val trustedPath = vpnUp || !tailscaleHost
+    return when {
+        answer == ServerAnswer.SillyTavern -> null
+        (answer == ServerAnswer.AuthRequired || answer == ServerAnswer.LoginRedirect) && trustedPath -> null
+        !trustedPath -> UnreachableCase.TailscaleOff
+        connect == ConnectFailure.Refused -> UnreachableCase.ServerNotRunning
+        else -> UnreachableCase.ServerNotAnswering
+    }
 }
 
 /** The Unreachable screen's case: as [connectionVerdict], with [UnreachableCase.Other] when ST answered. */
-fun classifyUnreachable(vpnUp: Boolean, answer: ServerAnswer, connect: ConnectFailure?): UnreachableCase =
-    connectionVerdict(vpnUp, answer, connect) ?: UnreachableCase.Other
+fun classifyUnreachable(vpnUp: Boolean, answer: ServerAnswer, connect: ConnectFailure?, tailscaleHost: Boolean): UnreachableCase =
+    connectionVerdict(vpnUp, answer, connect, tailscaleHost) ?: UnreachableCase.Other
+
+/**
+ * [host] (as in a URL; IPv6 may be in brackets) is a Tailscale address: IPv4 in `100.64.0.0/10`,
+ * IPv6 in `fd7a:115c:a1e0::/48`, or a MagicDNS name under `.ts.net`.
+ */
+fun isTailscaleHost(host: String): Boolean {
+    val h = host.trim().removePrefix("[").removeSuffix("]").removeSuffix(".").lowercase()
+    if (h.endsWith(".ts.net")) return true
+    ipv4Octets(h)?.let { (a, b) -> return a == 100 && b in 64..127 }
+    val hextets = ipv6Hextets(h) ?: return false
+    return hextets[0] == 0xfd7a && hextets[1] == 0x115c && hextets[2] == 0xa1e0
+}
+
+/** [serverUrl]'s host is a Tailscale address ([isTailscaleHost]); false if it isn't a URL with a host. */
+fun isTailscaleServer(serverUrl: String): Boolean = serverEndpoint(serverUrl)?.let { isTailscaleHost(it.first) } == true
+
+/** The four octets of a dotted-quad IPv4 literal, or null. */
+private fun ipv4Octets(s: String): List<Int>? {
+    val parts = s.split('.')
+    if (parts.size != 4) return null
+    return parts.map { p -> p.takeIf { it.length in 1..3 && it.all(Char::isDigit) }?.toInt()?.takeIf { it <= 255 } ?: return null }
+}
+
+/** The eight hextets of a plain IPv6 literal (`::` allowed; no embedded IPv4, no zone), or null. */
+private fun ipv6Hextets(s: String): List<Int>? {
+    if (':' !in s) return null
+    val halves = s.split("::")
+    if (halves.size > 2) return null
+    fun groups(part: String) = if (part.isEmpty()) emptyList() else part.split(':')
+    val head = groups(halves[0])
+    val tail = if (halves.size == 2) groups(halves[1]) else emptyList()
+    val zeros = 8 - head.size - tail.size
+    if (if (halves.size == 2) zeros < 1 else zeros != 0) return null
+    return (head + List(if (halves.size == 2) zeros else 0) { "0" } + tail).map { g ->
+        g.takeIf { it.length in 1..4 && it.all { c -> c.isDigit() || c in 'a'..'f' } }?.toInt(16) ?: return null
+    }
+}
 
 /** Android reports a refused connect or a missing route as a ConnectException with the errno in its message. */
 fun connectFailureOf(e: Throwable?): ConnectFailure? {
@@ -181,17 +223,19 @@ class UnreachableProbe(context: Context) {
 
     /**
      * Off the main thread: asks ST's `/version` (with the WebView's session cookie, ~2.5 s connect and
-     * read). Null when SillyTavern itself answered; otherwise the VPN check and, with the VPN up, a
-     * ~2 s TCP connect to tell a refused port from silence ([connectionVerdict]). A URL without a host
-     * counts as answering (nothing to say).
+     * read). Null when SillyTavern itself answered; otherwise the VPN check and a ~2 s TCP connect to
+     * tell a refused port from silence ([connectionVerdict]). The connect is skipped for a Tailscale
+     * server with the VPN down (a carrier's CGNAT would answer it). A URL without a host counts as
+     * answering (nothing to say).
      */
     suspend fun check(serverUrl: String): UnreachableCase? = withContext(Dispatchers.IO) {
         if (serverEndpoint(serverUrl) == null) return@withContext null
         val answer = askVersion(serverUrl)
         if (answer == ServerAnswer.SillyTavern) return@withContext null
+        val tailscale = isTailscaleServer(serverUrl)
         val vpn = vpnUp()
-        val connect = if (vpn) connect(serverUrl) else null
-        connectionVerdict(vpn, answer, connect)
+        val connect = if (vpn || !tailscale) connect(serverUrl) else null
+        connectionVerdict(vpn, answer, connect, tailscale)
     }
 
     /** `GET /version`, no redirects followed, at most [MAX_VERSION_BYTES] read. Any failure is [ServerAnswer.None]. */

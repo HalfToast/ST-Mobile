@@ -24,4 +24,10 @@ class ChatStateTest {
     @Test fun onlyLivePagesTellThePanelChatIsBack() {
         assertEquals(listOf(ChatState.Ready, ChatState.LoginRequired), all.filter { it.isLiveServerPage })
     }
+
+    @Test fun theLoadingPillSaysReconnectingOnlyAfterALivePage() {
+        // A first load (fresh install, a new address) is connecting, not reconnecting.
+        assertEquals("Connecting…", loadingPillText(pageWasLive = false))
+        assertEquals("Reconnecting…", loadingPillText(pageWasLive = true))
+    }
 }

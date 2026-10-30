@@ -33,6 +33,8 @@ import kotlinx.coroutines.launch
 class UnreachableActions(
     /** Works out the [UnreachableCase] (off the main thread). */
     val classify: suspend () -> UnreachableCase,
+    /** The server's address is a Tailscale one ([isTailscaleServer]): picks the no-answer words. */
+    val tailscaleHost: () -> Boolean,
     val vpnUp: () -> Boolean,
     /** Reports the VPN state (at once, then on changes); returns the unregister function. */
     val watchVpn: (onVpnState: (vpnUp: Boolean) -> Unit) -> () -> Unit,
@@ -102,9 +104,14 @@ fun UnreachableScreen(
     }
 
     val (title, text) = when (case) {
-        UnreachableCase.TailscaleOff -> "Tailscale is off on this phone" to "Turn it on to reach the tablet."
-        UnreachableCase.ServerNotRunning -> "SillyTavern isn't running" to "The tablet is reachable, but SillyTavern isn't serving."
-        UnreachableCase.TabletNotAnswering -> "The tablet isn't answering" to "It may be asleep or signed out of Tailscale."
+        UnreachableCase.TailscaleOff -> "Tailscale is off on this phone" to "Turn it on to reach the server."
+        UnreachableCase.ServerNotRunning ->
+            "SillyTavern isn't running" to "The server answers, but nothing is listening on SillyTavern's port."
+        UnreachableCase.ServerNotAnswering -> if (actions.tailscaleHost()) {
+            "The server isn't answering" to "It may be asleep, offline or signed out of Tailscale."
+        } else {
+            "Can't reach the server" to "Check that it's on and that this phone is on the same network or VPN."
+        }
         UnreachableCase.Other, null -> "SillyTavern is unreachable" to state.reason
     }
     Surface(Modifier.fillMaxSize(), color = Color(p.background)) {
