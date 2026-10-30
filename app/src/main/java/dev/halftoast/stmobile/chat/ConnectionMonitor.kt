@@ -56,6 +56,9 @@ class ConnectionMonitor(
         if (watch.cover != null) {
             startTicker()
             handle(Decision.Probe)
+        } else {
+            // A probe deferred before stop() never ran; run it now, or later failures stay unprobed.
+            handle(watch.onDeferredProbe(live()))
         }
     }
 
@@ -139,7 +142,8 @@ class ConnectionMonitor(
         ticker = scope.launch {
             while (true) {
                 delay(TICK_MS)
-                handle(watch.onTick())
+                // A probe can take about as long as a tick; one already running answers this tick too.
+                if (probing?.isActive != true) handle(watch.onTick())
             }
         }
     }

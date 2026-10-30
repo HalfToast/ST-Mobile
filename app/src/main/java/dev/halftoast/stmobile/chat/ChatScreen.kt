@@ -5,6 +5,7 @@ import androidx.compose.foundation.indication
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.PressInteraction
 import androidx.compose.runtime.remember
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.pointer.PointerEvent
 import androidx.compose.ui.input.pointer.changedToDown
 import androidx.compose.ui.input.pointer.changedToUp
@@ -73,11 +74,13 @@ fun ChatScreen(
     val state by holder.state.collectAsState()
     val cover by holder.cover.collectAsState()
     val context = LocalContext.current
-    // Decoded off the main thread; re-read (and dropped at once) whenever the snapshot is cleared.
+    // Decoded off the main thread, only while Loading (so it is the latest save, and a full-screen
+    // bitmap isn't held while the chat is up); dropped at once whenever the snapshot is cleared.
     val cleared by Snapshot.cleared.collectAsState()
-    val snapshot by produceState<ImageBitmap?>(null, cleared) {
+    val loading = state == ChatState.Loading
+    val snapshot by produceState<ImageBitmap?>(null, cleared, loading) {
         value = null
-        value = Snapshot.load(context.applicationContext)?.asImageBitmap()
+        if (loading) value = Snapshot.load(context.applicationContext)?.asImageBitmap()
     }
     val p = LocalStPalette.current
     Box(modifier.fillMaxSize()) {
@@ -232,7 +235,8 @@ private class CompactTapNode(
                 press = PressInteraction.Press(change.position).also { interactions.tryEmit(it) }
             }
             change.changedToUp() && press != null -> {
-                val tapped = !change.isConsumed
+                // Lifted after sliding off the button (past its touch slop area): no tap.
+                val tapped = !change.isConsumed && isInside(change.position, bounds)
                 endPress(released = tapped)
                 if (tapped) {
                     change.consume()
@@ -240,6 +244,11 @@ private class CompactTapNode(
                 }
             }
         }
+    }
+
+    private fun isInside(pos: Offset, bounds: IntSize): Boolean {
+        val e = touchBoundsExpansion // symmetric, so start/end need no layout direction
+        return pos.x >= -e.start && pos.x <= bounds.width + e.end && pos.y >= -e.top && pos.y <= bounds.height + e.bottom
     }
 
     override fun onCancelPointerInput() = endPress(released = false)

@@ -184,6 +184,7 @@ class WebViewHolder(
 
     fun reload() {
         if (destroyed) return
+        loadGeneration++ // the old page's readiness poll must not mark this load Ready
         enterLoading()
         loadUrlTimed()
     }
@@ -416,6 +417,9 @@ class WebViewHolder(
             if (!isCurrent(gen, view)) return@Runnable
             view.evaluateJavascript(READY_PROBE) { r ->
                 if (!isCurrent(gen, view)) return@evaluateJavascript
+                val st = _state.value
+                // Only a page still loading becomes Ready or LoginRequired, never e.g. Unreachable.
+                if (st != ChatState.Loading && st != ChatState.Stalled) return@evaluateJavascript
                 when (r) {
                     "\"ready\"" -> {
                         val elapsed = SystemClock.elapsedRealtime() - loadStartedAt
@@ -426,8 +430,7 @@ class WebViewHolder(
                     }
                     "\"login\"" -> setState(ChatState.LoginRequired)
                     else -> {
-                        val st = _state.value
-                        if ((st == ChatState.Loading || st == ChatState.Stalled) && SystemClock.elapsedRealtime() < giveUpAt) {
+                        if (SystemClock.elapsedRealtime() < giveUpAt) {
                             mainHandler.postDelayed(poll, if (st == ChatState.Stalled) STALLED_POLL_MS else POLL_INTERVAL_MS)
                         }
                     }
