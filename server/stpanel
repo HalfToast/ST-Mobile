@@ -113,6 +113,7 @@ flush_input() {
 # ------------------------------------------------------------------------------
 # Finding node: PATH, then nvm, fnm, Volta and the usual install folders.
 # Sets NODE_BIN and puts its folder first on PATH.
+# Twin: app/src/main/assets/probes/whitelist.sh (the app's whitelist probe); keep them in step.
 # ------------------------------------------------------------------------------
 found_node() {
     NODE_BIN=$(command -v node 2>/dev/null) || return 1
@@ -185,6 +186,8 @@ find_node() {
 
 # ------------------------------------------------------------------------------
 # Processes. No /proc on macOS: pgrep/ps for the list, lsof for working folders.
+# Twin of pid_alive … is_st_server, pidfile_pid, get_sillytavern_pid, get_port, find_tool and
+# battery_info: app/src/main/assets/probes/dashboard.sh (the app's dashboard); keep them in step.
 # ------------------------------------------------------------------------------
 
 # Alive and not a zombie.
@@ -213,13 +216,11 @@ proc_args() {
 
 # The program name the process was started as (argv[0]).
 proc_argv0() {
-    local a
     if [ -r "/proc/$1/cmdline" ]; then
         tr '\0' '\n' < "/proc/$1/cmdline" 2>/dev/null | head -n 1
     else
-        a=$(ps -p "$1" -ww -o args= 2>/dev/null)
-        a=${a#"${a%%[! ]*}"}
-        echo "${a%% *}"
+        # macOS: comm is the whole argv[0], spaces in its path included (args can't tell them apart).
+        ps -p "$1" -o comm= 2>/dev/null
     fi
 }
 
@@ -233,6 +234,21 @@ proc_cwd() {
     lsof_bin=$(command -v lsof 2>/dev/null)
     [ -z "$lsof_bin" ] && [ -x /usr/sbin/lsof ] && lsof_bin=/usr/sbin/lsof
     [ -n "$lsof_bin" ] && "$lsof_bin" -a -d cwd -p "$1" -Fn 2>/dev/null | sed -n 's/^n//p' | head -n 1
+}
+
+# Pids of the direct children of process $1.
+child_pids() {
+    local f
+    if command -v pgrep >/dev/null 2>&1; then
+        pgrep -P "$1" 2>/dev/null
+    elif [ -d /proc/self ]; then
+        for f in /proc/[0-9]*; do
+            # The parent pid is the second field after the parenthesised command name.
+            [ "$(sed 's/.*) [^ ]* \([0-9]*\).*/\1/' "$f/stat" 2>/dev/null)" = "$1" ] && echo "${f#/proc/}"
+        done
+    else
+        ps -A -o pid= -o ppid= 2>/dev/null | awk -v p="$1" '$2 == p { print $1 }'
+    fi
 }
 
 # Pids of processes whose args match the extended regex $1 (to be checked further).
@@ -359,6 +375,17 @@ terminate_pids() {
     return 1
 }
 
+# Children of this folder's supervisors that aren't in $1 (a list of pids): a server its supervisor
+# is still starting (not yet node, so is_st_server misses it), or the supervisor's revive sleep.
+supervisor_children() {
+    local s c
+    for s in $(find_supervisor_pids); do
+        for c in $(child_pids "$s"); do
+            case " $1 " in *" $c "*) ;; *) echo "$c" ;; esac
+        done
+    done
+}
+
 stop_supervisors() {
     local sups
     sups=$(find_supervisor_pids)
@@ -477,14 +504,19 @@ start_server() {
 }
 
 stop_server() {
-    local pids
+    local pids kids
     require_st_dir || return 1
 
     # Signal watchdog to not auto-restart
     touch "$STOP_FILE" 2>/dev/null
 
     pids=$(find_server_pids)
+    # Killing only the supervisor would leave a server it is still starting running on its own.
+    # shellcheck disable=SC2086
+    kids=$(supervisor_children "$(echo $pids)")
     if [ -z "$pids" ]; then
+        # shellcheck disable=SC2086
+        [ -z "$kids" ] || terminate_pids 12 $kids || kill -9 $kids 2>/dev/null
         stop_supervisors
         rm -f "$STOP_FILE" "$PID_FILE"
         echo "SillyTavern is not running."
@@ -495,14 +527,14 @@ stop_server() {
     echo "Stopping SillyTavern gracefully (PID: $(echo $pids))..."
     # Wait up to 6 seconds for graceful exit
     # shellcheck disable=SC2086
-    if terminate_pids 12 $pids; then
+    if terminate_pids 12 $pids $kids; then
         stop_supervisors
         rm -f "$STOP_FILE" "$PID_FILE"
         echo "✓ SillyTavern stopped successfully."
     else
         echo "Force stopping SillyTavern..."
         # shellcheck disable=SC2086
-        kill -9 $pids 2>/dev/null
+        kill -9 $pids $kids 2>/dev/null
         stop_supervisors
         rm -f "$STOP_FILE" "$PID_FILE"
         echo "✓ SillyTavern stopped."

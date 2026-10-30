@@ -79,24 +79,6 @@ class StpanelTest {
         File(dir, "config.yaml").writeText("port: 8123\nwhitelistMode: false\n")
     }
 
-    /**
-     * Writes its args next to the server.js it was given, then idles until TERM. It re-executes
-     * itself with argv[0] `node`, so the process looks like a real node (stpanel checks argv[0]).
-     */
-    private fun fakeNode(file: File) {
-        file.parentFile?.mkdirs()
-        file.writeText(
-            """
-            #!/bin/bash
-            case "${'$'}*" in *server.js*) ;; *) exit 0 ;; esac
-            for a in "${'$'}@"; do last=${'$'}a; done
-            for a in "${'$'}@"; do printf '%s\n' "${'$'}a"; done > "${'$'}(dirname "${'$'}last")/node.args"
-            exec -a node /bin/bash -c 'trap "kill \${'$'}s 2>/dev/null; exit 0" TERM INT; while :; do sleep 1 & s=${'$'}!; wait ${'$'}s; done' node "${'$'}@"
-            """.trimIndent() + "\n",
-        )
-        file.setExecutable(true)
-    }
-
     private data class Result(val code: Int, val out: String, val err: String)
 
     private fun run(
@@ -157,8 +139,8 @@ class StpanelTest {
             .toList()
 
     /** A fake node started by hand (not by stpanel) from [cwd]; returns the process and its pid. */
-    private fun launchDirectly(cwd: File, vararg args: String): Pair<Process, Long> {
-        val p = ProcessBuilder(listOf("/bin/sh", "-c", "echo \$\$; exec \"\$0\" \"\$@\" >/dev/null 2>&1", File(bin, "node").path) + args)
+    private fun launchDirectly(cwd: File, vararg args: String, node: File = File(bin, "node")): Pair<Process, Long> {
+        val p = ProcessBuilder(listOf("/bin/sh", "-c", "echo \$\$; exec \"\$0\" \"\$@\" >/dev/null 2>&1", node.path) + args)
             .directory(cwd).start()
         started += p
         p.outputStream.close()
@@ -208,8 +190,8 @@ class StpanelTest {
         assertTrue(p.waitFor(10, TimeUnit.SECONDS))
     }
 
-    @Test fun stopStopsTheOriginalSupervisorLoop() {
-        // startst's supervisor body, with its ST_DIR pasted in the way startst does it.
+    /** startst's supervisor loop, with its ST_DIR pasted in the way startst does it; `node` from [nodeDir]. */
+    private fun originalSupervisor(nodeDir: File): Process {
         val loop = """
             trap "" HUP SIGHUP
             ST_DIR="${stDir.path}"
@@ -228,16 +210,50 @@ class StpanelTest {
             done
         """.trimIndent()
         val sup = ProcessBuilder("/bin/bash", "-c", loop).apply {
-            environment()["PATH"] = "${bin.path}:/usr/bin:/bin"
+            environment()["PATH"] = "${nodeDir.path}:/usr/bin:/bin"
             redirectErrorStream(true)
             redirectOutput(File("/dev/null"))
         }.start()
         started += sup
+        return sup
+    }
+
+    @Test fun stopStopsTheOriginalSupervisorLoop() {
+        val sup = originalSupervisor(bin)
         waitUntil("pid file") { pidFile.exists() && pidFile.readText().isNotBlank() }
         val node = pidFile.readText().trim().toLong()
         assertEquals(0, run("stop").code)
         assertTrue(sup.waitFor(10, TimeUnit.SECONDS))
         assertFalse(alive(node))
+    }
+
+    /**
+     * The pid file names the supervisor's child before that child has become node (between fork
+     * and exec, or a node slow to start): stop must end it too, not just the supervisor.
+     */
+    @Test fun stopEndsAServerItsSupervisorIsStillStarting() {
+        val slowBin = File(root, "slowbin")
+        fakeNode(File(slowBin, "node"), startDelay = "1")
+        val sup = originalSupervisor(slowBin)
+        waitUntil("pid file") { pidFile.exists() && pidFile.readText().isNotBlank() }
+        val node = pidFile.readText().trim().toLong()
+        assertEquals(0, run("stop").code)
+        assertTrue(sup.waitFor(10, TimeUnit.SECONDS))
+        Thread.sleep(1_500) // past the fake node's start delay: it would be node by now
+        assertFalse(alive(node))
+        assertEquals(emptyList<Long>(), processesWith(slowBin.path))
+    }
+
+    /** macOS reads argv[0] from ps: a node whose path holds a space is still node. */
+    @Test fun findsANodeWhosePathHoldsASpace() {
+        val spaced = File(root, "My Node/node")
+        fakeNode(spaced, argv0 = "\"${'$'}0\"")
+        val (p, pid) = launchDirectly(stDir, "--max-old-space-size=2048", "server.js", node = spaced)
+        waitUntil("node.args") { argsFile.exists() }
+        val status = run("status")
+        assertTrue(status.out, status.out.contains("PID: $pid"))
+        assertEquals(0, run("stop").code)
+        assertTrue(p.waitFor(10, TimeUnit.SECONDS))
     }
 
     @Test fun leavesServersOfOtherFoldersAlone() {
@@ -560,6 +576,28 @@ class StpanelTest {
     }
 
     companion object {
+        /**
+         * Writes a fake node to [file]: it writes its args next to the server.js it was given, then
+         * idles until TERM. It re-executes itself with argv[0] [argv0] (a shell expression; `node`, so
+         * the process looks like a real node, as stpanel checks argv[0]), after [startDelay] seconds
+         * when given (a server its supervisor is still starting). Its own path stays in its args, so
+         * a test can find and kill it by its temp folder.
+         */
+        fun fakeNode(file: File, argv0: String = "node", startDelay: String? = null) {
+            file.parentFile?.mkdirs()
+            file.writeText(
+                """
+                #!/bin/bash
+                case "${'$'}*" in *server.js*) ;; *) exit 0 ;; esac
+                for a in "${'$'}@"; do last=${'$'}a; done
+                for a in "${'$'}@"; do printf '%s\n' "${'$'}a"; done > "${'$'}(dirname "${'$'}last")/node.args"
+                ${startDelay?.let { "sleep $it" } ?: ""}
+                exec -a $argv0 /bin/bash -c 'trap "kill \${'$'}s 2>/dev/null; exit 0" TERM INT; while :; do sleep 1 & s=${'$'}!; wait ${'$'}s; done' "${'$'}0" "${'$'}@"
+                """.trimIndent() + "\n",
+            )
+            file.setExecutable(true)
+        }
+
         /** The machine's real node, for the whitelist tests. */
         val realNode: File? by lazy {
             val dirs = (System.getenv("PATH") ?: "").split(':') +
@@ -567,24 +605,29 @@ class StpanelTest {
             dirs.filter { it.isNotEmpty() }.map { File(it, "node") }.firstOrNull { it.isFile && it.canExecute() }
         }
 
-        /** A yaml package: one under ~/Developer/<project>/node_modules, else installed into build/test-node. */
+        /** True for a yaml 2.x package (SillyTavern's; stpanel uses its parseDocument API). */
+        private fun isYaml2(dir: File): Boolean = runCatching {
+            Regex(""""version"\s*:\s*"2\.""").containsMatchIn(File(dir, "package.json").readText())
+        }.getOrDefault(false)
+
+        /** A yaml 2.x package: one under ~/Developer/<project>/node_modules, else installed into build/test-node. */
         val yamlPackage: File? by lazy {
             File(System.getProperty("user.home"), "Developer").listFiles()?.sorted()
                 ?.map { File(it, "node_modules/yaml") }
-                ?.firstOrNull { File(it, "package.json").isFile }
+                ?.firstOrNull { isYaml2(it) }
                 ?.let { return@lazy it }
             val local = File("build/test-node/node_modules/yaml")
-            if (!File(local, "package.json").isFile) {
+            if (!isYaml2(local)) {
                 val npm = realNode?.let { File(it.parentFile, "npm") }?.takeIf { it.canExecute() }
                 if (npm != null) {
                     runCatching {
-                        ProcessBuilder(npm.path, "install", "--prefix", "build/test-node", "yaml")
+                        ProcessBuilder(npm.path, "install", "--prefix", "build/test-node", "yaml@2")
                             .redirectErrorStream(true).redirectOutput(File("/dev/null")).start()
                             .waitFor(120, TimeUnit.SECONDS)
                     }
                 }
             }
-            local.takeIf { File(it, "package.json").isFile }
+            local.takeIf { isYaml2(it) }
         }
     }
 }
