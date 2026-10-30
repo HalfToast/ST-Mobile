@@ -73,13 +73,35 @@
     postsAreSpacedOut: function () {
       return Promise.all([fetch('/a'), fetch('/b'), fetch('/c')].map(function (p) { return p.catch(function () {}); }))
         .then(function () {
-          eq(posted, ['fail'], 'one post for a burst');
+          eq(posted, ['fail'], 'the first of a burst posts at once');
           return wait(1100);
         }).then(function () {
-          return fetch('/d').catch(function () {});
+          eq(posted, ['fail', 'fail'], 'the rest of the burst posts once after the gap, not dropped');
+          return wait(1100);
         }).then(function () {
-          eq(posted, ['fail', 'fail'], 'a later failure posts again');
+          eq(posted, ['fail', 'fail'], 'nothing more');
         });
+    },
+    aSingleFailurePostsOnce: function () {
+      return fetch('/single').catch(function () {}).then(function () {
+        return wait(1100);
+      }).then(function () {
+        eq(posted, ['fail'], 'no trailing post without more failures');
+      });
+    },
+    aReusedXhrReportsEachFailureOnce: function () {
+      var before = failures();
+      var x = new XMLHttpRequest();
+      function once() {
+        return new Promise(function (resolve) {
+          x.onloadend = function () { setTimeout(resolve, 0); };
+          x.open('GET', 'definitely-missing-file.json');
+          x.send();
+        });
+      }
+      return once().then(once).then(function () {
+        eq(failures(), before + 2, 'two failures, counted once each');
+      });
     },
     xhrStatusZeroIsReported: function () {
       var before = failures();
@@ -129,7 +151,7 @@
       if (i >= names.length) return finish('PASS');
       var name = names[i++];
       // Each test starts after the post spacing has passed, with nothing recorded.
-      wait(name === 'postsAreSpacedOut' ? 1100 : 0).then(function () {
+      wait(name === 'postsAreSpacedOut' || name === 'aSingleFailurePostsOnce' ? 1100 : 0).then(function () {
         posted.length = 0;
         return tests[name]();
       }).then(next, function (e) {

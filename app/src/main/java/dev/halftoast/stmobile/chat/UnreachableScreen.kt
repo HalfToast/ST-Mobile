@@ -53,7 +53,8 @@ class UnreachableActions(
  * With Tailscale off it retries once each time a VPN comes up (see [VpnRetryGate]).
  * [serverOnline]: the dashboard says the process runs, so Start is off, as in the Control Center.
  * [fixedCase]: the case is already known (a connection lost under a loaded chat); no classifying and
- * no VPN auto-retry here, the caller's [UnreachableActions.onRetry] decides.
+ * no VPN auto-retry here, the caller's [UnreachableActions.onRetry] decides. [retrying]: that check is
+ * running; Retry shows it is busy.
  */
 @Composable
 fun UnreachableScreen(
@@ -64,6 +65,7 @@ fun UnreachableScreen(
     serverOnline: Boolean,
     lastAction: ActionResult?,
     fixedCase: UnreachableCase? = null,
+    retrying: Boolean = false,
 ) {
     val p = LocalStPalette.current
     var classified by remember { mutableStateOf<UnreachableCase?>(null) }
@@ -124,7 +126,7 @@ fun UnreachableScreen(
                 when (case) {
                     UnreachableCase.TailscaleOff -> {
                         StButton("Open Tailscale", actions.onOpenTailscale, button)
-                        StButton("Retry", actions.onRetry, button)
+                        StButton("Retry", actions.onRetry, button, enabled = !retrying, busy = retrying)
                     }
                     UnreachableCase.ServerNotRunning -> {
                         StButton(
@@ -140,7 +142,7 @@ fun UnreachableScreen(
                         StButton("Open Control Center", actions.onOpenControlCenter, button)
                     }
                     else -> {
-                        StButton("Retry", actions.onRetry, button)
+                        StButton("Retry", actions.onRetry, button, enabled = !retrying, busy = retrying)
                         StButton("Open Control Center", actions.onOpenControlCenter, button)
                     }
                 }

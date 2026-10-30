@@ -132,7 +132,9 @@ class MainActivity : ComponentActivity() {
                     // Never reload a working or loading page, or a sign-in on another site: only
                     // Unreachable / Stalled (a reload would kill a generation in progress).
                     onServerRestarted = {
-                        currentHolder.get()?.let { h -> if (h.state.value.reloadWhenServerBack) h.reload() }
+                        // Also a chat covered because the connection was lost: its session belongs to
+                        // the old process. No double reload: whichever runs first makes it Loading.
+                        currentHolder.get()?.let { h -> if (h.state.value.reloadWhenServerBack || h.cover.value != null) h.reload() }
                     },
                     onServerDown = { reason -> currentHolder.get()?.markServerDown(reason) },
                 )
@@ -312,6 +314,7 @@ class MainActivity : ComponentActivity() {
                                     },
                                     covered = { case ->
                                         val panel by panelVm.ui.collectAsState()
+                                        val checking by connection.checking.collectAsState()
                                         UnreachableScreen(
                                             state = ChatState.Unreachable("The connection to SillyTavern was lost."),
                                             attempt = 0,
@@ -320,6 +323,7 @@ class MainActivity : ComponentActivity() {
                                             serverOnline = panel.dashboard?.online == true,
                                             lastAction = panel.lastAction,
                                             fixedCase = case,
+                                            retrying = checking,
                                         )
                                     },
                                     // Jump straight to the keyboard's final height: following the slide frame

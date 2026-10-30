@@ -5,6 +5,8 @@ import dev.halftoast.stmobile.chat.ConnectionWatch.Decision
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 /**
@@ -23,10 +25,17 @@ class ConnectionMonitor(
     private var stopVpnWatch: (() -> Unit)? = null
     private var ticker: Job? = null
     private var probing: Job? = null
+    private var deferred: Job? = null
+    /** A probe was asked for while one ran: run once more after its answer. */
+    private var probeAgain = false
     private var started = false
 
+    private val _checking = MutableStateFlow(false)
+    /** A probe is running (the covered screen's Retry shows it is busy). */
+    val checking: StateFlow<Boolean> = _checking
+
     init {
-        holder.onNetworkFailure = { handle(watch.onPageFailure(live())) }
+        holder.onNetworkFailure = { if (started) handle(watch.onPageFailure(live())) }
         scope.launch {
             holder.state.collect {
                 if (!it.coversOnConnectionLoss) {
@@ -53,6 +62,16 @@ class ConnectionMonitor(
         stopVpnWatch?.invoke()
         stopVpnWatch = null
         stopTicker()
+        deferred?.cancel()
+        deferred = null
+        // A running probe's answer is dropped; start() probes again if the chat is covered.
+        if (probing?.isActive == true) {
+            probing?.cancel()
+            watch.onProbeAbandoned()
+        }
+        probing = null
+        probeAgain = false
+        _checking.value = false
     }
 
     /** The covered screen's Retry: uncover, reload or stay, as for the automatic return. */
@@ -77,14 +96,34 @@ class ConnectionMonitor(
                 holder.reload()
             }
             Decision.Probe -> runProbe()
+            is Decision.ProbeLater -> {
+                deferred?.cancel()
+                deferred = scope.launch {
+                    delay(decision.delayMs)
+                    if (started) handle(watch.onDeferredProbe(live()))
+                }
+            }
         }
     }
 
     private fun runProbe() {
-        if (probing?.isActive == true) return // its answer is about to come
+        if (!started) return
+        if (probing?.isActive == true) {
+            probeAgain = true
+            return
+        }
+        _checking.value = true
         probing = scope.launch {
             val verdict = probe.verdict(serverUrl())
+            if (!started) return@launch
+            probing = null
+            _checking.value = false
             handle(watch.onProbe(verdict, live()))
+            if (probeAgain) {
+                probeAgain = false
+                // Asked for while that one ran; still wanted if the chat is covered.
+                handle(watch.onRetry())
+            }
         }
     }
 

@@ -9,6 +9,7 @@ import android.os.Message
 import android.os.SystemClock
 import android.util.Log
 import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ValueCallback
@@ -94,14 +95,21 @@ class WebViewHolder(
     }
 
     /**
-     * Covers the loaded page with [case] (it stays loaded: no reload, no new WebView), and closes a
-     * list sheet the page has open, since nothing under the cover can be tapped.
+     * Covers the loaded page with [case] (it stays loaded: no reload, no new WebView). Nothing under the
+     * cover can be used, so an open list sheet closes, focus leaves the page and the keyboard hides.
      */
     fun cover(case: UnreachableCase) {
         if (destroyed || !_state.value.coversOnConnectionLoss) return
         if (_cover.value == null) {
-            webView.evaluateJavascript("window.__stmSelectSheet&&window.__stmSelectSheet.close()", null)
+            // Nothing under the cover may take input: no open sheet, no focused field, no keyboard.
+            webView.evaluateJavascript(
+                "window.__stmSelectSheet&&window.__stmSelectSheet.close();" +
+                    "if(document.activeElement&&document.activeElement.blur)document.activeElement.blur();",
+                null,
+            )
             _sheetOpen.value = false
+            webView.clearFocus()
+            activity.getSystemService(InputMethodManager::class.java)?.hideSoftInputFromWindow(webView.windowToken, 0)
         }
         _cover.value = case
     }

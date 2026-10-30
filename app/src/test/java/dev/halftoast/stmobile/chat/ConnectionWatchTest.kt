@@ -70,9 +70,10 @@ class ConnectionWatchTest {
         assertEquals(Decision.Probe, watch.onPageFailure(pageLive = true))
         watch.onProbe(verdict = null, pageLive = true)
         clock = 2_999
-        assertEquals(Decision.None, watch.onPageFailure(pageLive = true))
+        assertEquals("deferred to the end of the gap", Decision.ProbeLater(1), watch.onPageFailure(pageLive = true))
         clock = 3_000
         assertEquals(Decision.Probe, watch.onPageFailure(pageLive = true))
+        assertEquals("the deferred one is then moot", Decision.None, watch.onDeferredProbe(pageLive = true))
     }
 
     @Test fun retryWithTheServerStillDownStaysCovered() {
@@ -125,5 +126,49 @@ class ConnectionWatchTest {
         assertEquals(UnreachableCase.TailscaleOff, probeVerdict(vpnUp = false, failure = ConnectFailure.Timeout))
         assertEquals(UnreachableCase.ServerNotRunning, probeVerdict(vpnUp = true, failure = ConnectFailure.Refused))
         assertEquals(UnreachableCase.TabletNotAnswering, probeVerdict(vpnUp = true, failure = ConnectFailure.Timeout))
+    }
+
+    @Test fun aRefusedPortMeansTheProcessWasGoneSoComingBackReloads() {
+        vpnWasUp()
+        watch.onVpn(up = false, pageLive = true)
+        assertEquals(Decision.Probe, watch.onVpn(up = true, pageLive = true))
+        assertEquals(Decision.Cover(UnreachableCase.ServerNotRunning), watch.onProbe(UnreachableCase.ServerNotRunning, true))
+        // Restarted (from the cover or the Control Center): the page's session belongs to the old process.
+        assertEquals(Decision.Reload, watch.onProbe(verdict = null, pageLive = true))
+    }
+
+    @Test fun aDebouncedFailureIsProbedLaterNotForgotten() {
+        assertEquals(Decision.Probe, watch.onPageFailure(pageLive = true))
+        assertEquals(Decision.None, watch.onProbe(verdict = null, pageLive = true)) // a one-off
+        clock = 1_000
+        assertEquals(Decision.ProbeLater(2_000), watch.onPageFailure(pageLive = true))
+        clock = 1_500
+        assertEquals("one deferred probe at a time", Decision.None, watch.onPageFailure(pageLive = true))
+        clock = 3_000
+        assertEquals(Decision.Probe, watch.onDeferredProbe(pageLive = true))
+        assertEquals(
+            Decision.Cover(UnreachableCase.TabletNotAnswering),
+            watch.onProbe(UnreachableCase.TabletNotAnswering, pageLive = true),
+        )
+        assertEquals("the deferred failure counts", true, watch.failedDuringOutage)
+    }
+
+    @Test fun aDeferredProbeAfterACoverOrResetDoesNothing() {
+        assertEquals(Decision.Probe, watch.onPageFailure(pageLive = true))
+        watch.onProbe(verdict = null, pageLive = true)
+        assertEquals(Decision.ProbeLater(3_000), watch.onPageFailure(pageLive = true))
+        watch.onPageReset()
+        assertEquals(Decision.None, watch.onDeferredProbe(pageLive = true))
+        assertEquals(Decision.None, watch.onDeferredProbe(pageLive = false))
+    }
+
+    @Test fun anAbandonedProbeIsNotMistakenForAFailureProbeLater() {
+        vpnWasUp()
+        assertEquals(Decision.Probe, watch.onPageFailure(pageLive = true))
+        watch.onProbeAbandoned() // the app went to the background mid-probe
+        watch.onVpn(up = false, pageLive = true)
+        watch.onRetry()
+        watch.onProbe(UnreachableCase.TailscaleOff, pageLive = true)
+        assertEquals(false, watch.failedDuringOutage)
     }
 }

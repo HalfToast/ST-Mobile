@@ -6,7 +6,7 @@ file=${1:?usage: tools/web-test.sh <file.html>}
 CHROME=${CHROME:-"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"}
 abs="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
 dom=$("$CHROME" --headless=new --disable-gpu --allow-file-access-from-files \
-    --virtual-time-budget=5000 --dump-dom "file://$abs" 2>/dev/null) || true
+    --virtual-time-budget=10000 --dump-dom "file://$abs" 2>/dev/null) || true
 if printf '%s' "$dom" | grep -q 'data-result="PASS"'; then
     echo "PASS"
     exit 0

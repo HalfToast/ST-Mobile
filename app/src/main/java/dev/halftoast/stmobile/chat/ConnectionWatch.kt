@@ -6,11 +6,11 @@ package dev.halftoast.stmobile.chat
  *
  * - The phone's VPN going down while the page is live covers it at once (TailscaleOff).
  * - A network failure of one of ST's own requests probes the server (at most every
- *   [FAILURE_PROBE_GAP_MS]); a probe that can't reach it covers with the matching case, a probe that
- *   can is a one-off and changes nothing.
+ *   [FAILURE_PROBE_GAP_MS]; a failure within the gap is probed when it ends); a probe that can't reach
+ *   it covers with the matching case, a probe that can is a one-off and changes nothing.
  * - While covered: the VPN coming back, a Retry or a periodic tick probes; once the server answers,
- *   the cover goes. If any of ST's requests failed during the outage the page reloads (as ST asks),
- *   otherwise it is just uncovered, exactly as it was.
+ *   the cover goes. If any of ST's requests failed during the outage, or ST's port was refused (its
+ *   process was gone), the page reloads (as ST asks); otherwise it is just uncovered, exactly as it was.
  * - A reload, or the page leaving the live states, forgets the outage ([onPageReset]).
  *
  * "Live" is a loaded server page: Ready, Stalled or LoginRequired.
@@ -23,6 +23,8 @@ class ConnectionWatch(private val now: () -> Long) {
         data object Reload : Decision
         /** Run the probe and report it with [onProbe]. */
         data object Probe : Decision
+        /** Call [onDeferredProbe] in [delayMs]: a failure came within the probe gap. */
+        data class ProbeLater(val delayMs: Long) : Decision
     }
 
     /** What covers the chat now, or null. */
@@ -36,6 +38,7 @@ class ConnectionWatch(private val now: () -> Long) {
     private var vpnUp: Boolean? = null
     private var lastFailureProbeAt: Long? = null
     private var probingForFailure = false
+    private var deferredProbePending = false
 
     /** The VPN was reported [up] or down. The first report is only the starting point. */
     fun onVpn(up: Boolean, pageLive: Boolean): Decision {
@@ -56,7 +59,35 @@ class ConnectionWatch(private val now: () -> Long) {
             return Decision.None
         }
         val last = lastFailureProbeAt
-        if (last != null && now() - last < FAILURE_PROBE_GAP_MS) return Decision.None
+        if (last != null && now() - last < FAILURE_PROBE_GAP_MS) {
+            // Too soon after the last probe: probe once the gap is over, so the real start of an
+            // outage right after a one-off failure is not missed.
+            if (deferredProbePending) return Decision.None
+            deferredProbePending = true
+            return Decision.ProbeLater(last + FAILURE_PROBE_GAP_MS - now())
+        }
+        return failureProbe()
+    }
+
+    /** The probe [Decision.ProbeLater] asked for is due. */
+    fun onDeferredProbe(pageLive: Boolean): Decision {
+        if (!deferredProbePending) return Decision.None
+        deferredProbePending = false
+        if (!pageLive) return Decision.None
+        if (cover != null) {
+            failedDuringOutage = true
+            return Decision.None
+        }
+        return failureProbe()
+    }
+
+    /** A probe was dropped without an answer (the app went to the background). */
+    fun onProbeAbandoned() {
+        probingForFailure = false
+    }
+
+    private fun failureProbe(): Decision {
+        deferredProbePending = false
         lastFailureProbeAt = now()
         probingForFailure = true
         return Decision.Probe
@@ -74,7 +105,9 @@ class ConnectionWatch(private val now: () -> Long) {
             failedDuringOutage = false
             return if (reload) Decision.Reload else Decision.Uncover
         }
-        if (forFailure) failedDuringOutage = true
+        // A refused port means ST's process was gone: the page's session belongs to the old one, so
+        // coming back reloads even if none of its requests failed.
+        if (forFailure || verdict == UnreachableCase.ServerNotRunning) failedDuringOutage = true
         return coverWith(verdict)
     }
 
@@ -89,6 +122,7 @@ class ConnectionWatch(private val now: () -> Long) {
         cover = null
         failedDuringOutage = false
         probingForFailure = false
+        deferredProbePending = false
     }
 
     private fun coverWith(case: UnreachableCase): Decision {

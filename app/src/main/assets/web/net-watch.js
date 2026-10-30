@@ -9,7 +9,8 @@
  * - Requests are untouched: the wrapped fetch resolves or rejects with exactly what the original gave,
  *   and XHR only gains listeners.
  * - Counts every failure (window.__stmNetWatch.failures) and posts "fail" to the app's STMobileNet
- *   listener at most once per POST_GAP_MS. Any failure here is swallowed. Never logs, never sends a URL.
+ *   listener at most once per POST_GAP_MS; failures inside the gap get one post when it ends. Any
+ *   failure here is swallowed. Never logs, never sends a URL.
  */
 (function () {
   'use strict';
@@ -19,15 +20,21 @@
 
   var POST_GAP_MS = 1000;
   var lastPost = -Infinity;
+  var trailing = null; // a post owed for failures inside the gap
+
+  function post() {
+    lastPost = Date.now();
+    try { STMobileNet.postMessage('fail'); } catch (e) { /* no bridge: nothing to tell */ }
+  }
 
   function report() {
     try {
       state.failures++;
-      var now = Date.now();
-      if (now - lastPost < POST_GAP_MS) return;
-      lastPost = now;
-      STMobileNet.postMessage('fail');
-    } catch (e) { /* no bridge: nothing to tell */ }
+      var wait = POST_GAP_MS - (Date.now() - lastPost);
+      if (wait <= 0) return post();
+      // Inside the gap: post once when it ends, never drop it (the app must know a save failed).
+      if (trailing === null) trailing = setTimeout(function () { trailing = null; post(); }, wait);
+    } catch (e) { /* as if unwatched */ }
   }
 
   function sameOrigin(url) {
@@ -68,12 +75,15 @@
     };
     proto.send = function () {
       try {
-        var xhr = this, aborted = false;
-        if (xhr.__stmUrl != null && sameOrigin(xhr.__stmUrl)) {
-          xhr.addEventListener('abort', function () { aborted = true; });
+        var xhr = this;
+        xhr.__stmAborted = false;
+        // Once per XHR object: a reused one must not report a failure twice.
+        if (!xhr.__stmWatched) {
+          xhr.__stmWatched = true;
+          xhr.addEventListener('abort', function () { xhr.__stmAborted = true; });
           xhr.addEventListener('loadend', function () {
             try {
-              if (!aborted && xhr.status === 0) report();
+              if (!xhr.__stmAborted && xhr.status === 0 && xhr.__stmUrl != null && sameOrigin(xhr.__stmUrl)) report();
             } catch (e) { /* ignore */ }
           });
         }
