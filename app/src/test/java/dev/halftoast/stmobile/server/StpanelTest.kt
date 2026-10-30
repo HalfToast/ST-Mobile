@@ -635,7 +635,7 @@ class StpanelTest {
     /** A fake npm next to the fake node: logs its folder and args, exits with FAKE_NPM_RC. */
     private fun fakeNpm(dir: File = bin) {
         File(dir, "npm").apply {
-            writeText("#!/bin/bash\nprintf '%s\\n' \"${'$'}PWD\" \"${'$'}@\" > \"${npmLog.path}\"\nexit ${'$'}{FAKE_NPM_RC:-0}\n")
+            writeText("#!/bin/bash\nprintf '%s\\n' \"${'$'}PWD\" \"${'$'}@\" \"NODE_ENV=${'$'}NODE_ENV\" > \"${npmLog.path}\"\nexit ${'$'}{FAKE_NPM_RC:-0}\n")
             setExecutable(true)
         }
     }
@@ -649,7 +649,9 @@ class StpanelTest {
         val npm = npmLog.readText().lines()
         assertEquals(File(stDir.path).canonicalPath, File(npm[0]).canonicalPath)
         assertEquals("install", npm[1])
-        assertTrue("$npm", npm.containsAll(listOf("--no-audit", "--no-fund", "--omit=dev")))
+        assertTrue("$npm", npm.containsAll(listOf("--no-audit", "--no-fund", "--omit=dev", "--ignore-scripts")))
+        // As SillyTavern's own start.sh: production install, packages' install scripts not run.
+        assertTrue("$npm", "NODE_ENV=production" in npm)
     }
 
     @Test fun updateInstallsPackagesWhenOnlyTheLockFileChanged() {

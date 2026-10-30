@@ -784,7 +784,9 @@ install_packages() {
         return 1
     fi
     echo -e "\n${CLR_BOLD}Packages changed: npm install${CLR_RESET}"
-    (cd "$ST_DIR" && "$npm_bin" install --no-save --no-audit --no-fund --omit=dev --loglevel=error --no-progress)
+    # The same install SillyTavern's start.sh does: production, packages' own install scripts not run.
+    (cd "$ST_DIR" && NODE_ENV=production "$npm_bin" install --no-save --no-audit --no-fund --omit=dev \
+        --ignore-scripts --loglevel=error --no-progress)
     rc=$?
     if [ "$rc" -ne 0 ]; then
         echo "stpanel: npm install failed (exit $rc); run it in the SillyTavern folder before starting" >&2
