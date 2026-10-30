@@ -1,0 +1,258 @@
+#!/usr/bin/env bash
+# Smoke tests for server/stpanel on Linux, in Docker containers:
+#   debian:stable-slim (GNU userland, procps) and alpine (busybox userland, with bash).
+#
+#   tools/test-stpanel-linux.sh            run every image
+#   tools/test-stpanel-linux.sh alpine     run the images given
+#
+# The repo is mounted read-only. A fake node (argv[0] "node", idles until TERM) stands in for
+# SillyTavern; the whitelist checks use the container's real node with a yaml package mounted
+# from the host (~/Developer/*/node_modules/yaml or app/build/test-node/node_modules/yaml) and
+# are skipped, with a SKIP line, when either is missing. Prints PASS/FAIL per check and exits
+# non-zero if any check fails.
+
+if [ "$1" != "--inside" ]; then
+    repo=$(cd "$(dirname "$0")/.." && pwd)
+    images=("$@")
+    [ ${#images[@]} -gt 0 ] || images=(debian:stable-slim alpine:latest)
+    yaml=""
+    for d in "$HOME"/Developer/*/node_modules/yaml "$repo/app/build/test-node/node_modules/yaml"; do
+        [ -f "$d/package.json" ] && { yaml=$(cd "$d" && pwd -P); break; }
+    done
+    status=0
+    for image in "${images[@]}"; do
+        case "$image" in
+            debian*|ubuntu*)
+                setup='apt-get update -qq >/dev/null && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends procps iproute2 nodejs python3 >/dev/null 2>&1' ;;
+            alpine*)
+                setup='apk add -q --no-cache bash nodejs python3 >/dev/null 2>&1' ;;
+            *)
+                echo "unknown image $image (debian*, ubuntu* or alpine*)" >&2; exit 2 ;;
+        esac
+        mounts=(-v "$repo:/repo:ro")
+        [ -n "$yaml" ] && mounts+=(-v "$yaml:/yaml:ro")
+        echo "=== $image ==="
+        if ! docker run --rm --init "${mounts[@]}" "$image" sh -c "$setup || echo 'setup failed' >&2; exec bash /repo/tools/test-stpanel-linux.sh --inside"; then
+            status=1
+        fi
+        echo ""
+    done
+    [ "$status" -eq 0 ] && echo "ALL PASSED" || echo "SOME CHECKS FAILED"
+    exit $status
+fi
+
+# ---------------------------------------------------------------- inside the container
+STPANEL=/repo/server/stpanel
+W=/tmp/w
+ST="$W/My Apps/SillyTavern"
+OTHER="$W/Other/SillyTavern"
+FAKEBIN="$W/bin"
+WATCHDOG="Watchdog reviving in 2 seconds"
+FAILS=0
+ESC=$(printf '\033')
+
+pass() { echo "PASS  $1"; }
+fail() { echo "FAIL  $1${2:+  ($2)}"; FAILS=$((FAILS + 1)); }
+skip() { echo "SKIP  $1${2:+  ($2)}"; }
+check() { # check <name> <command...>
+    local name=$1
+    shift
+    if "$@"; then pass "$name"; else fail "$name"; fi
+}
+
+echo "$(bash --version | head -n 1); ps: $(readlink -f "$(command -v ps)" 2>/dev/null)"
+
+make_tree() {
+    mkdir -p "$1/data/default-user/characters"
+    : > "$1/server.js"
+    printf 'port: 8123\nwhitelistMode: false\n' > "$1/config.yaml"
+}
+
+mkdir -p "$FAKEBIN"
+cat > "$FAKEBIN/node" <<'EOF'
+#!/bin/bash
+case "$*" in *server.js*) ;; *) exit 0 ;; esac
+for a in "$@"; do last=$a; done
+for a in "$@"; do printf '%s\n' "$a"; done > "$(dirname "$last")/node.args"
+exec -a node /bin/bash -c 'trap "kill \$s 2>/dev/null; exit 0" TERM INT; while :; do sleep 1 & s=$!; wait $s; done' node "$@"
+EOF
+chmod +x "$FAKEBIN/node"
+make_tree "$ST"
+make_tree "$OTHER"
+
+# st [VAR=value ...] <args...>: stpanel with a clean environment and the fake node first on PATH.
+st() {
+    local envs=()
+    while [ $# -gt 0 ]; do
+        case "$1" in [A-Z_]*=*) envs+=("$1"); shift ;; *) break ;; esac
+    done
+    env -i PATH="$FAKEBIN:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin" HOME="$W" ST_DIR="$ST" \
+        STPANEL_NODE_DIRS="" "${envs[@]}" bash "$STPANEL" "$@"
+}
+
+# Pids of live, non-zombie processes whose args contain every argument.
+procs_with() {
+    local f pid args n state ok
+    for f in /proc/[0-9]*; do
+        pid=${f#/proc/}
+        args=$(tr '\0' ' ' < "$f/cmdline" 2>/dev/null) || continue
+        [ -n "$args" ] || continue
+        state=$(sed 's/.*) //' "$f/stat" 2>/dev/null | cut -c 1)
+        [ "$state" = "Z" ] && continue
+        ok=1
+        for n in "$@"; do
+            case "$args" in *"$n"*) ;; *) ok=0 ;; esac
+        done
+        [ "$ok" -eq 1 ] && echo "$pid"
+    done
+}
+count() { procs_with "$@" | wc -l | tr -d ' '; }
+alive() { [ -d "/proc/$1" ] && [ "$(sed 's/.*) //' "/proc/$1/stat" 2>/dev/null | cut -c 1)" != "Z" ]; }
+no_ansi() { case "$1" in *"$ESC"*) return 1 ;; esac; return 0; }
+
+# ---- start / status / stop
+out=$(st start); rc=$?
+check "start exits 0" [ "$rc" -eq 0 ]
+pid=$(tr -dc '0-9' < "$ST/sillytavern.pid" 2>/dev/null)
+check "start writes the pid file" [ -n "$pid" ]
+check "the pid file's server is alive" alive "$pid"
+check "start writes the log" grep -q "Starting SillyTavern" "$ST/sillytavern.log"
+sleep 0.3
+check "node runs \$ST_DIR/server.js with --max-old-space-size" \
+    grep -q -- "--max-old-space-size=2048" "$ST/node.args"
+check "node is given the absolute server.js" grep -qx "$ST/server.js" "$ST/node.args"
+out=$(st status)
+check "status says ONLINE with the pid" grep -q "ONLINE (PID: $pid)" <<< "$out"
+check "status has no ANSI when not a terminal" no_ansi "$out"
+check "status prints no empty battery" eval '! grep -Eq "Battery: *%|N/A%" <<< "$out"'
+out=$(st urls)
+if command -v ip >/dev/null 2>&1 || [ -x /sbin/ifconfig ]; then
+    check "urls finds the container's eth0 address" grep -Eq "Local Wi-Fi: +http://[0-9.]+:8123" <<< "$out"
+else
+    skip "urls finds the container's eth0 address" "no ip or ifconfig"
+fi
+if [ -x /sbin/ifconfig ]; then
+    out=$(env -i PATH="$FAKEBIN:/usr/bin:/bin" HOME="$W" ST_DIR="$ST" bash "$STPANEL" urls)
+    check "urls falls back to ifconfig without ip on PATH" grep -Eq "Local Wi-Fi: +http://[0-9.]+:8123" <<< "$out"
+fi
+out=$(st stop); rc=$?
+check "stop exits 0" [ "$rc" -eq 0 ]
+check "stop ends the server" eval '! alive "$pid"'
+check "stop removes the pid file" [ ! -e "$ST/sillytavern.pid" ]
+check "stop removes the stop marker" [ ! -e "$ST/.stop_requested" ]
+check "stop ends the supervisor" [ "$(count "$WATCHDOG" "$ST")" -eq 0 ]
+
+# ---- restart
+st start >/dev/null
+first=$(tr -dc '0-9' < "$ST/sillytavern.pid")
+out=$(st restart); rc=$?
+second=$(tr -dc '0-9' < "$ST/sillytavern.pid" 2>/dev/null)
+check "restart exits 0" [ "$rc" -eq 0 ]
+check "restart starts a new server" eval '[ -n "$second" ] && [ "$first" != "$second" ]'
+check "restart leaves one server" [ "$(count "$ST/server.js")" -eq 1 ]
+check "restart leaves one supervisor" [ "$(count "$WATCHDOG" "$ST")" -eq 1 ]
+st stop >/dev/null
+
+# ---- a server started by hand from the folder, no pid file
+(cd "$ST" && exec "$FAKEBIN/node" --max-old-space-size=2048 server.js) >/dev/null 2>&1 &
+byhand=$!
+sleep 0.5
+check "status finds a server by its working folder" grep -q "PID: $byhand" <<< "$(st status)"
+st stop >/dev/null
+sleep 0.2
+check "stop ends it" eval '! alive "$byhand"'
+
+# ---- other folders and processes that only mention node are left alone
+(cd "$OTHER" && exec "$FAKEBIN/node" --max-old-space-size=2048 server.js) >/dev/null 2>&1 &
+other1=$!
+(cd "$W" && exec "$FAKEBIN/node" --max-old-space-size=2048 "$OTHER/server.js") >/dev/null 2>&1 &
+other2=$!
+(cd "$ST" && exec sh -c 'while :; do sleep 1; done' nodemon server.js) >/dev/null 2>&1 &
+mention=$!
+sleep 0.5
+check "status ignores other folders' servers" grep -q "OFFLINE" <<< "$(st status)"
+st stop >/dev/null
+check "stop leaves another folder's server (by cwd)" alive "$other1"
+check "stop leaves another folder's server (by args)" alive "$other2"
+check "stop leaves a non-node process that mentions node" alive "$mention"
+kill "$other1" "$other2" "$mention" 2>/dev/null
+
+# ---- backup
+echo png > "$ST/data/default-user/characters/Seraphina.png"
+mkdir -p "$ST/data/default-user/backups" && echo '{}' > "$ST/data/default-user/backups/chat_old.jsonl"
+out=$(st backup); rc=$?
+check "backup exits 0" [ "$rc" -eq 0 ]
+check "backup reports success and size" grep -q "Archive Size:" <<< "$out"
+archive=$(ls "$ST/backups" 2>/dev/null | head -n 1)
+check "backup is named st_backup_YYYYmmdd_HHMMSS.tar.gz" eval '[[ "$archive" =~ ^st_backup_[0-9]{8}_[0-9]{6}\.tar\.gz$ ]]'
+list=$(tar -tzf "$ST/backups/$archive" 2>/dev/null)
+check "backup holds the user folder" grep -q "^data/default-user/characters/Seraphina.png" <<< "$list"
+check "backup holds config.yaml" grep -qx "config.yaml" <<< "$list"
+check "backup leaves out the user's backups/" eval '! grep -q "^data/default-user/backups" <<< "$list"'
+rm -rf "$ST/backups"
+mkdir -p "$ST/data/alice/chats" && echo '{}' > "$ST/data/alice/chats/x.jsonl"
+st ST_USER=alice backup >/dev/null
+list=$(tar -tzf "$ST/backups/$(ls "$ST/backups" | head -n 1)" 2>/dev/null)
+check "backup with ST_USER=alice holds data/alice" grep -q "^data/alice/chats/x.jsonl" <<< "$list"
+check "backup with ST_USER=alice leaves out default-user" eval '! grep -q "^data/default-user" <<< "$list"'
+st ST_USER=nobody backup >/dev/null 2>&1
+check "backup fails without the user folder" [ $? -ne 0 ]
+
+# ---- clean
+mkdir -p "$ST/data/_cache" && echo x > "$ST/data/_cache/x"
+printf 'n\n' | st clean >/dev/null
+check "clean n keeps the cache" [ -e "$ST/data/_cache/x" ]
+out=$(printf 'y\n' | st clean)
+check "clean y empties the cache" eval '[ -d "$ST/data/_cache" ] && [ -z "$(ls -A "$ST/data/_cache")" ]'
+check "clean y says so" grep -q "Cache successfully cleared" <<< "$out"
+check "clean has no ANSI when not a terminal" no_ansi "$out"
+
+# ---- update
+st update >/dev/null 2>&1
+check "update fails outside a git checkout" [ $? -ne 0 ]
+
+# ---- stats
+if command -v python3 >/dev/null 2>&1; then
+    out=$(st stats); rc=$?
+    check "stats exits 0" [ "$rc" -eq 0 ]
+    check "stats lists the character" grep -q "Seraphina" <<< "$out"
+    check "stats has no ANSI when not a terminal" no_ansi "$out"
+else
+    skip "stats" "no python3"
+fi
+
+# ---- whitelist (the container's real node)
+real_node=""
+for d in /usr/bin/node /usr/local/bin/node; do [ -x "$d" ] && { real_node=$d; break; }; done
+if [ -z "$real_node" ]; then
+    skip "whitelist" "no node in the container"
+elif [ ! -f /yaml/package.json ]; then
+    skip "whitelist" "no yaml package mounted"
+else
+    mkdir -p "$ST/node_modules" && ln -s /yaml "$ST/node_modules/yaml"
+    wl() { (cd "$W" && env -i PATH="/usr/local/bin:/usr/bin:/bin" HOME="$W" ST_DIR="$ST" bash "$STPANEL" whitelist "$@"); }
+    cfg=$(printf '# settings\nport: 8123\nwhitelistMode: true\nwhitelist:\n  - 127.0.0.1\n# keep this comment\n')
+    printf '%s\n' "$cfg" > "$ST/config.yaml"
+    out=$(printf '2\n192.168.1.20\n' | wl); rc=$?
+    check "whitelist menu 2 adds an address" eval '[ "$rc" -eq 0 ] && grep -q -- "- 192.168.1.20" "$ST/config.yaml"'
+    check "whitelist add keeps comments" grep -q "# keep this comment" "$ST/config.yaml"
+    check "whitelist output has no ANSI when not a terminal" no_ansi "$out"
+    printf '%s\n' "$cfg" > "$ST/config.yaml"
+    out=$(printf '2\n1.2.3.4"); require("fs").writeFileSync("pwned","x"); ("\n' | wl 2>&1); rc=$?
+    check "whitelist rejects an injection" [ "$rc" -ne 0 ]
+    check "the injection changed nothing" [ "$(cat "$ST/config.yaml")" = "$cfg" ]
+    check "the injection wrote no file" [ -z "$(find "$W" -name pwned 2>/dev/null)" ]
+    out=$(printf '1\n' | wl)
+    check "whitelist menu 1 toggles the mode" grep -q "whitelistMode: false" "$ST/config.yaml"
+    wl mode on >/dev/null && wl mode on >/dev/null
+    check "whitelist mode on is absolute" grep -q "whitelistMode: true" "$ST/config.yaml"
+    wl add 10.0.0.0/8 >/dev/null && wl add fd00::1 >/dev/null
+    check "whitelist add takes CIDR and IPv6" eval 'grep -q -- "- 10.0.0.0/8" "$ST/config.yaml" && grep -q "fd00::1" "$ST/config.yaml"'
+    wl add 256.1.1.1 >/dev/null 2>&1
+    check "whitelist add rejects 256.1.1.1" [ $? -ne 0 ]
+fi
+
+pkill -f "$W" 2>/dev/null
+echo ""
+if [ "$FAILS" -eq 0 ]; then echo "all checks passed"; else echo "$FAILS check(s) failed"; fi
+[ "$FAILS" -eq 0 ]
