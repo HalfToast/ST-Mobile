@@ -174,7 +174,7 @@ class StpanelTest {
         // writes the pid file.
         val (p, pid) = launchDirectly(stDir, "--max-old-space-size=2048", "server.js")
         pidFile.writeText("$pid\n")
-        waitUntil("node.args") { argsFile.exists() }
+        waitUntil("node") { isNode(pid) }
         val stop = run("stop")
         assertEquals(stop.err, 0, stop.code)
         assertTrue(p.waitFor(10, TimeUnit.SECONDS))
@@ -183,7 +183,7 @@ class StpanelTest {
 
     @Test fun stopFindsAServerByItsFolderWithoutAPidFile() {
         val (p, pid) = launchDirectly(stDir, "--max-old-space-size=2048", "server.js")
-        waitUntil("node.args") { argsFile.exists() }
+        waitUntil("node") { isNode(pid) }
         val status = run("status")
         assertTrue(status.out, status.out.contains("PID: $pid"))
         assertEquals(0, run("stop").code)
@@ -249,7 +249,7 @@ class StpanelTest {
         val spaced = File(root, "My Node/node")
         fakeNode(spaced, argv0 = "\"${'$'}0\"")
         val (p, pid) = launchDirectly(stDir, "--max-old-space-size=2048", "server.js", node = spaced)
-        waitUntil("node.args") { argsFile.exists() }
+        waitUntil("node") { isNode(pid) }
         val status = run("status")
         assertTrue(status.out, status.out.contains("PID: $pid"))
         assertEquals(0, run("stop").code)
@@ -576,6 +576,22 @@ class StpanelTest {
     }
 
     companion object {
+        /**
+         * True once [pid] runs as node (argv[0] `node` or `…/node`), past the fake node's re-exec:
+         * before it, stpanel and dashboard.sh rightly don't count it as a server.
+         */
+        fun isNode(pid: Long): Boolean {
+            val cmdline = File("/proc/$pid/cmdline")
+            val argv0 = if (cmdline.exists()) {
+                runCatching { cmdline.readText().substringBefore('\u0000') }.getOrDefault("")
+            } else {
+                val p = ProcessBuilder("ps", "-p", "$pid", "-o", "comm=").redirectError(ProcessBuilder.Redirect.to(File("/dev/null"))).start()
+                p.outputStream.close()
+                p.inputStream.bufferedReader().readText().also { p.waitFor(10, TimeUnit.SECONDS) }.trim()
+            }
+            return argv0.substringAfterLast('/') == "node"
+        }
+
         /**
          * Writes a fake node to [file]: it writes its args next to the server.js it was given, then
          * idles until TERM. It re-executes itself with argv[0] [argv0] (a shell expression; `node`, so

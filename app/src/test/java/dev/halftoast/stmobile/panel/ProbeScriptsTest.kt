@@ -103,14 +103,12 @@ class ProbeScriptsTest {
         started += p
         p.outputStream.close()
         val pid = p.inputStream.bufferedReader().readLine().trim().toLong()
-        val serverJs = File(args.last()).let { if (it.isAbsolute) it else File(cwd, args.last()) }
-        val argsFile = File(serverJs.parentFile, "node.args")
+        // Until its re-exec as `node`, the fake node is bash and rightly not counted as a server.
         val deadline = System.currentTimeMillis() + 10_000
-        while (!argsFile.exists()) {
-            assertTrue("fake node did not start", System.currentTimeMillis() < deadline)
+        while (!StpanelTest.isNode(pid)) {
+            assertTrue("fake node did not become node", System.currentTimeMillis() < deadline)
             Thread.sleep(50)
         }
-        Thread.sleep(200) // past its exec as `node`
         return pid
     }
 

@@ -23,8 +23,8 @@ case "$ST_DIR" in
     *) ST_DIR="$(pwd)/$ST_DIR" ;;
 esac
 
-# ---- finding node: twin of server/stpanel's found_node and find_node; keep them in step
-# (only the "node not found" message differs: no "stpanel:" prefix).
+# ---- finding node: verbatim twins of server/stpanel's found_node and find_node, but for the
+# "node not found" message's missing "stpanel:" prefix (ScriptTwinsTest checks them).
 # PATH, then nvm, fnm, Volta and the usual install folders. Sets NODE_BIN and puts its folder first on PATH.
 found_node() {
     NODE_BIN=$(command -v node 2>/dev/null) || return 1

@@ -35,7 +35,8 @@ CONFIG_FILE="${ST_DIR}/config.yaml"
 BACKUP_DIR="${ST_DIR}/backups"
 WATCHDOG_TEXT="Watchdog reviving in 2 seconds"
 
-# ---- processes: twin of server/stpanel's (pid_alive … get_sillytavern_pid); keep them in step.
+# ---- processes: verbatim twins of server/stpanel's pid_alive … pidfile_pid and get_port
+# (ScriptTwinsTest checks them); get_sillytavern_pid is this script's own, the same lookup.
 # Only this folder's server counts: the pid file's process if it is one, else a node process
 # (argv[0] node) running <ST_DIR>/server.js or started from <ST_DIR>.
 
@@ -157,7 +158,7 @@ get_port() {
     echo "$port"
 }
 
-# ---- system info: twin of server/stpanel's find_tool and battery_info.
+# ---- system info: verbatim twins of server/stpanel's find_tool and battery_info (ScriptTwinsTest).
 
 # A command from PATH or, on macOS, from the sbin folders a minimal PATH leaves out.
 find_tool() {

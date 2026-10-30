@@ -43,7 +43,7 @@ class StatsViewModel(
             try {
                 val c = command()
                 val r = shell.exec(c.command, c.stdin)
-                if (r.exitCode == 127 && "python3" in r.stderr) {
+                if (pythonMissing(r.exitCode, r.stderr)) {
                     _ui.update { it.copy(error = PYTHON_MISSING, hostKeyChanged = false) }
                 } else if (r.exitCode != 0) {
                     val first = r.stderr.lineSequence().map { it.trim() }.lastOrNull { it.isNotEmpty() }
@@ -65,6 +65,10 @@ class StatsViewModel(
 
     private companion object {
         const val PYTHON_MISSING = "Stats needs Python 3 on the server (on a Mac: install the Command Line Tools)"
+
+        /** No python3 (127), or macOS's /usr/bin/python3 stand-in without the Command Line Tools (xcrun error, exit 1). */
+        fun pythonMissing(exitCode: Int?, stderr: String): Boolean =
+            (exitCode == 127 && "python3" in stderr) || (exitCode != 0 && "xcrun: error" in stderr)
     }
 
     private fun describe(e: Exception): String = when (e) {

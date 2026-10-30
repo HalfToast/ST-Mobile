@@ -90,6 +90,14 @@ androidComponents {
     }
 }
 
+// The unit tests run server/stpanel and the probe scripts from disk: a change to them must rerun the
+// tests rather than leave them up to date.
+tasks.withType<Test>().configureEach {
+    inputs.files(rootProject.file("server/stpanel"), fileTree("src/main/assets/probes"))
+        .withPropertyName("serverScripts")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+}
+
 dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)

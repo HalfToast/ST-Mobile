@@ -45,6 +45,10 @@ class StatsViewModelTest {
         val expected = "Stats needs Python 3 on the server (on a Mac: install the Command Line Tools)"
         assertEquals(expected, errorFor(ExecResult(127, "", "env: 'python3': No such file or directory\n")))
         assertEquals(expected, errorFor(ExecResult(127, "", "env: python3: No such file or directory\n")))
+        // macOS's /usr/bin/python3 without the Command Line Tools.
+        val xcrun = "xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools), " +
+            "missing xcrun at: /Library/Developer/CommandLineTools/usr/bin/xcrun\n"
+        assertEquals(expected, errorFor(ExecResult(1, "", xcrun)))
     }
 
     @Test fun otherFailuresShowTheirLastLine() {

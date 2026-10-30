@@ -113,7 +113,8 @@ flush_input() {
 # ------------------------------------------------------------------------------
 # Finding node: PATH, then nvm, fnm, Volta and the usual install folders.
 # Sets NODE_BIN and puts its folder first on PATH.
-# Twin: app/src/main/assets/probes/whitelist.sh (the app's whitelist probe); keep them in step.
+# Verbatim twins in app/src/main/assets/probes/whitelist.sh (the app's whitelist probe), but for
+# the "stpanel:" prefix of find_node's message; ScriptTwinsTest fails when one copy changes alone.
 # ------------------------------------------------------------------------------
 found_node() {
     NODE_BIN=$(command -v node 2>/dev/null) || return 1
@@ -186,8 +187,9 @@ find_node() {
 
 # ------------------------------------------------------------------------------
 # Processes. No /proc on macOS: pgrep/ps for the list, lsof for working folders.
-# Twin of pid_alive … is_st_server, pidfile_pid, get_sillytavern_pid, get_port, find_tool and
-# battery_info: app/src/main/assets/probes/dashboard.sh (the app's dashboard); keep them in step.
+# pid_alive, proc_args, proc_argv0, proc_cwd, candidate_pids, is_st_server, pidfile_pid, get_port,
+# find_tool and battery_info have verbatim twins in app/src/main/assets/probes/dashboard.sh (the
+# app's dashboard); ScriptTwinsTest fails when one copy changes alone.
 # ------------------------------------------------------------------------------
 
 # Alive and not a zombie.
