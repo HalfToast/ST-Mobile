@@ -200,7 +200,7 @@ only the obvious personal details.
   `dev.halftoast.stmobile`, and the signing certificate (it identifies the publisher, as intended).
 - Local notes outside the repo (Claude memory, `.superpowers/`) are unaffected.
 - A final check greps the tracked tree for the IP, user name, serial, "tablet", "HalfToast's",
-  "phone", "HyperOS" (allowed only in the general Xiaomi battery tips), "Tailscale" (allowed only where
+  the phone model, "HyperOS" (allowed only in the general Xiaomi battery tips), "Tailscale" (allowed only where
   it is one VPN option or the Tailscale-address rule) and reports every remaining hit with a reason.
 
 ## Scope note: how SillyTavern is started (design call)

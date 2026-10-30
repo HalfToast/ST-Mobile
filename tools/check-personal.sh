@@ -1,7 +1,12 @@
 #!/bin/bash
-# Greps the tracked tree for details of one person's setup (an address, a Termux user, a phone
-# serial or model, the word "tablet", names from a chat, notes from an old process ledger) and
-# for words that are allowed only in some places (Tailscale, HyperOS/MIUI).
+# Greps the tracked tree for details of one person's setup (the word "tablet", names from a chat,
+# notes from an old process ledger, plus the private patterns below) and for words that are
+# allowed only in some places (Tailscale, HyperOS/MIUI).
+#
+# Private patterns: .superpowers/personal-patterns (git-ignored, so it never ships), one extended
+# regex per line for details that must not be written in a tracked file, not even here: addresses,
+# a Termux user, a phone serial or model. Blank lines and lines starting with # are ignored. When
+# the file is absent the check says so and runs with the generic words only.
 # Prints every hit, marked "allowed: <reason>" or "NOT ALLOWED". Exit 0 iff every hit is allowed.
 #
 # Allowlist: tools/check-personal.allow, one entry per line:
@@ -13,15 +18,24 @@ set -eu
 cd "$(dirname "$0")/.."
 
 allow=tools/check-personal.allow
-# The author's addresses (server and whitelisted devices), Termux user, adb serial, phone model and
-# its token in a user agent, names from a chat, the old process ledger, then words allowed only in places.
-pattern='100\.101\.102\.103|100\.101\.102\.105|100\.101\.102\.104|100\.101\.102\.106|u0_a123|<serial>'
-pattern+='|HyperOS|MIUI|HalfToast'"'"'s|Seraphina|Aria|Ezra|Ruling [0-9]|Tailscale'
+private=.superpowers/personal-patterns
+# Names from a chat, the old process ledger, then words allowed only in places.
+pattern='HyperOS|MIUI|HalfToast'"'"'s|Seraphina|Aria|Ezra|Ruling [0-9]|Tailscale'
 exclude=(':!tools/check-personal.sh' ":!$allow")
+
+personal=
+if [ -f "$private" ]; then
+    personal=$(grep -v -E '^[[:space:]]*(#|$)' "$private" | paste -s -d '|' - || true)
+fi
+if [ -z "$personal" ]; then
+    echo "Personal-pattern check skipped: no patterns in $private."
+fi
 
 hits=$( {
     git grep -n -I -E "$pattern" -- . "${exclude[@]}" || true
     git grep -n -I -i -E 'tablet' -- . "${exclude[@]}" || true
+    # The private patterns cover this script and its allowlist too: neither may hold them.
+    if [ -n "$personal" ]; then git grep -n -I -E "$personal" -- . || true; fi
 } | sort -u -t: -k1,1 -k2,2n )
 
 printf '%s\n' "$hits" | awk -v allowfile="$allow" '
