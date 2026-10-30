@@ -154,6 +154,9 @@ firewall such as `ufw` is on, allow SSH and SillyTavern's port from your own net
 range), for example `sudo ufw allow from 192.168.1.0/24 to any port 22 proto tcp` and the same with
 port 8000.
 
+If SillyTavern stops when the SSH session that started it closes (systemd-logind can end a user's
+processes at logout), run `sudo loginctl enable-linger <user>` once so they outlive the login.
+
 ### macOS
 
 Open System Settings > General > Sharing, turn on **Remote Login**, and click the info button next to it
