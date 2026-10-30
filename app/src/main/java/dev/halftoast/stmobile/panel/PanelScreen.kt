@@ -234,7 +234,7 @@ private fun StatsGrid(d: DashboardState) {
         StKeyValue("Uptime", if (d.online) d.uptime ?: "—" else "—")
         StKeyValue("Health", health)
         StKeyValue("CPU / RAM", cpuRam)
-        StKeyValue("Tablet battery", battery)
+        StKeyValue("Server battery", battery)
         StKeyValue("Disk free", disk)
         StKeyValue("Cache", d.cacheSize ?: "—")
         if (d.userDirMissing) {
@@ -333,7 +333,7 @@ private fun ConfirmDialog(action: PanelAction, d: DashboardState?, onConfirm: ()
         )
         PanelAction.Update -> Triple(
             "Update SillyTavern?",
-            "Runs git pull on the tablet" + (d?.let { " (${it.branch}, ${it.behind} behind)" } ?: "") +
+            "Runs git pull on the server" + (d?.let { " (${it.branch}, ${it.behind} behind)" } ?: "") +
                 ". The chat reloads afterwards; restart the server to finish.",
             "Update",
         )

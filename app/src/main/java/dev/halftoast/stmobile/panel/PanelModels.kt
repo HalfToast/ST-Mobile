@@ -26,9 +26,9 @@ data class DashboardState(
     val recentLogs: List<String>,
     /** The SillyTavern user folder the counts were read from. */
     val userDir: String? = null,
-    /** That folder doesn't exist on the tablet, so the counts are meaningless (all zero). */
+    /** That folder doesn't exist on the server, so the counts are meaningless (all zero). */
     val userDirMissing: Boolean = false,
-    /** The stpanel subcommand of an app-started action still running on the tablet, if any. */
+    /** The stpanel subcommand of an app-started action still running on the server, if any. */
     val runningAction: String? = null,
 )
 
@@ -40,6 +40,6 @@ sealed interface ActionResult {
     val message: String
     data class Ok(override val message: String) : ActionResult
     data class Failed(override val message: String) : ActionResult
-    /** The app stopped waiting (timeout) but the detached command keeps running on the tablet. */
+    /** The app stopped waiting (timeout) but the detached command keeps running on the server. */
     data class StillRunning(override val message: String) : ActionResult
 }

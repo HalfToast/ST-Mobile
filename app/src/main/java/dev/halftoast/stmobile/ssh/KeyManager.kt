@@ -44,7 +44,7 @@ class KeyManager(private val filesDir: File, private val wrapper: KeyWrapper) {
     fun getOrCreate(): KeyPair {
         cached?.let { return it }
         val kp = load() ?: run {
-            // Kept aside, never overwritten: the tablet still trusts this identity.
+            // Kept aside, never overwritten: the server still trusts this identity.
             if (file.exists()) file.renameTo(File(filesDir, "$FILE_NAME.bad"))
             create()
         }
@@ -61,7 +61,7 @@ class KeyManager(private val filesDir: File, private val wrapper: KeyWrapper) {
     /**
      * Null if there is no stored key or it can never be unwrapped (the Keystore key is gone or the
      * file is corrupt). Throws on anything else, e.g. a transient Keystore error: the call fails and
-     * is retried later, rather than replacing the identity the tablet trusts.
+     * is retried later, rather than replacing the identity the server trusts.
      */
     private fun load(): KeyPair? {
         if (!file.exists()) return null

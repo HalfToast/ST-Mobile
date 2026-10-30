@@ -34,7 +34,7 @@ class StMobileApp : Application() {
     /** The app's SSH identity. noBackupFilesDir: the wrapping key in Keystore never leaves the device anyway. */
     val keyManager: KeyManager by lazy { KeyManager(noBackupFilesDir, AndroidKeystoreWrapper()) }
 
-    /** One shared SSH connection to the tablet for every screen. */
+    /** One shared SSH connection to the server for every screen. */
     private val remoteShellLazy = lazy { SshRemoteShell(settings, keyManager) }
     val remoteShell: SshRemoteShell by remoteShellLazy
 

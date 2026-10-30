@@ -230,8 +230,8 @@ class MainActivity : ComponentActivity() {
                         onRetry = holder::retry,
                         onOpenControlCenter = { screen = Screen.Panel },
                         onOpenTailscale = ::openTailscale,
-                        // The Control Center's own Start; Chat then recovers the way it does after a
-                        // Start there (Ruling 18). Without SSH set up, the Control Center shows Setup.
+                        // The Control Center's own Start; Chat then reloads once the server serves again,
+                        // as after a Start there. Without SSH set up, the Control Center shows Setup.
                         onStartServer = {
                             if (sshScreensReady(setupDone, sshSetUp)) {
                                 panelVm.request(PanelAction.Start)

@@ -59,18 +59,18 @@ import kotlinx.coroutines.withContext
 /** User-facing text for a failed setup. */
 fun setupErrorMessage(e: Throwable, keyStage: Boolean): String = when (e) {
     is SshError.AuthFailed ->
-        if (keyStage) "The key was installed but the tablet didn't accept it. Try again." else "Password rejected"
+        if (keyStage) "The key was installed but the server didn't accept it. Try again." else "Password rejected"
     is SshError.NotSetUp -> e.message.orEmpty()
-    is SshError.Unreachable -> "Can't reach the tablet. Is Tailscale on?"
-    is SshError.Timeout -> "The tablet didn't answer in time. Is Tailscale on?"
+    is SshError.Unreachable -> "Can't reach the server. Check the SSH host and port, and that the server is awake."
+    is SshError.Timeout -> "The server didn't answer in time. Check that it's awake and this phone can reach it."
     is SshError.HostKeyChanged ->
-        "The tablet's SSH host key changed (pinned ${e.expected}, now ${e.actual}). " +
-            "Only trust the new key if you reinstalled Termux or SSH on the tablet."
+        "The server's SSH host key changed (pinned ${e.expected}, now ${e.actual}). " +
+            "Only trust the new key if you reinstalled the server or its SSH."
     else -> "Setup failed: ${e.message ?: e.javaClass.simpleName}"
 }
 
 /**
- * Connects to the tablet once with the password, installs the app's key, pins the host key and
+ * Connects to the server once with the password, installs the app's key, pins the host key and
  * checks key login. The password lives only in a non-saveable field and a CharArray that is
  * zeroed after the attempt; the field is cleared as soon as Connect is pressed.
  */
@@ -115,7 +115,7 @@ fun SetupScreen(
         val f = form.withDefaultHost()
         val problem = f.validate() ?: when {
             !f.hasSsh -> "Enter the SSH user"
-            password.isEmpty() -> "Enter the tablet password"
+            password.isEmpty() -> "Enter the SSH password"
             else -> null
         }
         if (problem != null) {
@@ -171,9 +171,9 @@ fun SetupScreen(
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         val p = LocalStPalette.current
-        StSectionTitle("Connect to the tablet")
+        StSectionTitle("Connect to the server")
         Text(
-            "The Control Center runs commands on the tablet over SSH. Enter the tablet's password once; " +
+            "The Control Center runs commands on the server over SSH. Enter the SSH user's password once; " +
                 "the app installs its own key and never stores the password.",
             color = Color(p.muted),
             style = MaterialTheme.typography.bodyMedium,
@@ -182,7 +182,7 @@ fun SetupScreen(
         OutlinedTextField(
             value = password,
             onValueChange = { password = it },
-            label = { Text("Tablet password") },
+            label = { Text("SSH password") },
             singleLine = true,
             enabled = !busy,
             visualTransformation = PasswordVisualTransformation(),
@@ -291,11 +291,11 @@ fun ConnectionFields(form: ConnectionForm, enabled: Boolean, onChange: (Connecti
 fun TrustHostKeyDialog(check: HostKeyCheck, onConfirm: () -> Unit, onDismiss: () -> Unit) {
     val body = when (check) {
         is HostKeyCheck.Changed ->
-            "The tablet now presents a different SSH host key.\n\nPinned: ${check.expected}\nNow: ${check.actual}\n\n" +
-                "Only trust it if you reinstalled Termux or SSH on the tablet or regenerated its host keys. " +
+            "The server now presents a different SSH host key.\n\nPinned: ${check.expected}\nNow: ${check.actual}\n\n" +
+                "Only trust it if you reinstalled the server or its SSH, or regenerated its host keys. " +
                 "If you didn't change anything, someone may be intercepting the connection."
-        is HostKeyCheck.Unpinned -> "Pin the tablet's host key?\n\n${check.presented}"
-        is HostKeyCheck.Matches -> "The tablet's host key matches the pinned key.\n\n${check.fingerprint}"
+        is HostKeyCheck.Unpinned -> "Pin the server's host key?\n\n${check.presented}"
+        is HostKeyCheck.Matches -> "The server's host key matches the pinned key.\n\n${check.fingerprint}"
     }
     StDialog(
         title = if (check is HostKeyCheck.Changed) "Trust the new host key?" else "Pin host key?",

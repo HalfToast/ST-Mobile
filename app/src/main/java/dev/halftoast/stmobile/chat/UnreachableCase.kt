@@ -211,7 +211,7 @@ class StartOutcomeWatch {
 class UnreachableProbe(context: Context) {
     private val connectivity = context.applicationContext.getSystemService(ConnectivityManager::class.java)
 
-    /** A VPN carries this app's traffic (Tailscale's network becomes the app's active network). */
+    /** A VPN carries this app's traffic (the VPN's network becomes the app's active network). */
     fun vpnUp(): Boolean = try {
         connectivity.getNetworkCapabilities(connectivity.activeNetwork)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true
     } catch (_: Exception) {

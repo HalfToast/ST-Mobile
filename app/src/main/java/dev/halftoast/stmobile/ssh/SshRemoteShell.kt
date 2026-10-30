@@ -34,7 +34,7 @@ import java.io.InputStream
 import java.security.PublicKey
 
 /**
- * Key-authenticated shell on the tablet. One connection is reused across calls and replaced when
+ * Key-authenticated shell on the server. One connection is reused across calls and replaced when
  * it drops, when the host/port/user settings change, or when opening a session on it fails. It is
  * closed after a minute without sessions and when the app goes to the background with nothing
  * running; the next call reconnects.
@@ -82,7 +82,7 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
                         currentCoroutineContext().ensureActive()
                         // Otherwise the connection died under us; the next call reconnects.
                         discard(client)
-                        throw SshError.Unreachable("Lost the connection to the tablet", e)
+                        throw SshError.Unreachable("Lost the connection to the server", e)
                     } finally {
                         session.closeQuietly()
                     }
@@ -124,7 +124,7 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
         } catch (e: IOException) {
             currentCoroutineContext().ensureActive()
             discard(client)
-            throw SshError.Unreachable("Lost the connection to the tablet", e)
+            throw SshError.Unreachable("Lost the connection to the server", e)
         } finally {
             session.terminate()
             session.closeQuietly()
@@ -145,7 +145,7 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
     }
 
     /**
-     * The fingerprint the tablet presents right now, without authenticating (nothing is sent but
+     * The fingerprint the server presents right now, without authenticating (nothing is sent but
      * the key exchange). For showing the user what "Trust new host key" would pin.
      */
     suspend fun presentedHostKey(): String = withContext(Dispatchers.IO) {
@@ -184,7 +184,7 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
             } catch (e2: IOException) {
                 currentCoroutineContext().ensureActive()
                 discard(second)
-                throw SshError.Unreachable("Can't reach the tablet", e2)
+                throw SshError.Unreachable("Can't reach the server", e2)
             }
         }
     }
@@ -213,10 +213,10 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
             client.authPublickey(target.user, KeyPairWrapper(keyPair))
         } catch (e: UserAuthException) {
             client.closeQuietly()
-            throw SshError.AuthFailed("The tablet rejected the app's key", e)
+            throw SshError.AuthFailed("The server rejected the app's key", e)
         } catch (e: IOException) {
             client.closeQuietly()
-            throw SshError.Unreachable("Can't reach the tablet", e)
+            throw SshError.Unreachable("Can't reach the server", e)
         }
         if (known.isNullOrEmpty()) verifier.seen?.let { settings.knownHostKey = it } // TrustAndStore
         return client
@@ -285,7 +285,7 @@ internal object SshConnect {
         } finally {
             client.closeQuietly()
         }
-        return seen ?: throw SshError.Unreachable("Can't reach the tablet", failure)
+        return seen ?: throw SshError.Unreachable("Can't reach the server", failure)
     }
 
     /** Connects and verifies the host key (blocking). Throws [SshError.HostKeyChanged] or [SshError.Unreachable]. */
@@ -304,7 +304,7 @@ internal object SshConnect {
         } catch (e: Exception) {
             client.closeQuietly()
             if (verifier.rejected) throw SshError.HostKeyChanged(knownHostKey.orEmpty(), verifier.seen.orEmpty())
-            throw SshError.Unreachable("Can't reach the tablet", e)
+            throw SshError.Unreachable("Can't reach the server", e)
         }
         return client to verifier
     }
@@ -319,14 +319,14 @@ internal suspend fun <T> withSshTimeout(timeoutMs: Long, block: suspend Coroutin
     try {
         return withTimeout(timeoutMs, block)
     } catch (e: TimeoutCancellationException) {
-        throw SshError.Timeout("No answer from the tablet within ${timeoutMs / 1000} s")
+        throw SshError.Timeout("No answer from the server within ${timeoutMs / 1000} s")
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
         currentCoroutineContext().ensureActive()
         val late = System.nanoTime() >= deadline
         if (late && e !is SshError.AuthFailed && e !is SshError.HostKeyChanged) {
-            throw SshError.Timeout("No answer from the tablet within ${timeoutMs / 1000} s")
+            throw SshError.Timeout("No answer from the server within ${timeoutMs / 1000} s")
         }
         throw e
     }

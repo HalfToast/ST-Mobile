@@ -7,9 +7,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OriginsTest {
-    private val server = Origins.of("http://100.101.102.103:8000/")
+    private val server = Origins.of("http://192.168.1.20:8000/")
 
-    @Test fun originOfServerUrl() = assertEquals("http://100.101.102.103:8000", server)
+    @Test fun originOfServerUrl() = assertEquals("http://192.168.1.20:8000", server)
 
     @Test fun normalisesCaseAndDefaultPorts() {
         assertEquals("http://example.com", Origins.of("HTTP://Example.COM:80/x?y#z"))
@@ -19,7 +19,7 @@ class OriginsTest {
     }
 
     @Test fun nonHttpHasNoOrigin() {
-        assertNull(Origins.of("blob:http://100.101.102.103:8000/uuid"))
+        assertNull(Origins.of("blob:http://192.168.1.20:8000/uuid"))
         assertNull(Origins.of("about:blank"))
         assertNull(Origins.of("mailto:a@b.c"))
         assertNull(Origins.of(null))
@@ -27,16 +27,16 @@ class OriginsTest {
     }
 
     @Test fun sameOriginChecks() {
-        assertTrue(Origins.isOn("http://100.101.102.103:8000/callback/openrouter?code=1", server))
+        assertTrue(Origins.isOn("http://192.168.1.20:8000/callback/openrouter?code=1", server))
         assertFalse(Origins.isOn("https://openrouter.ai/auth?callback_url=x", server))
-        assertFalse(Origins.isOn("http://100.101.102.103:8001/", server)) // other port
-        assertFalse(Origins.isOn("https://100.101.102.103:8000/", server)) // other scheme
-        assertFalse(Origins.isOn("http://100.101.102.103:8000/", null))
+        assertFalse(Origins.isOn("http://192.168.1.20:8001/", server)) // other port
+        assertFalse(Origins.isOn("https://192.168.1.20:8000/", server)) // other scheme
+        assertFalse(Origins.isOn("http://192.168.1.20:8000/", null))
     }
 
     @Test fun newWindowsNeverLoadInTheWebView() {
         assertEquals(LinkTarget.Browser, LinkPolicy.forNewWindow("https://docs.sillytavern.app/"))
-        assertEquals(LinkTarget.Browser, LinkPolicy.forNewWindow("http://100.101.102.103:8000/user/images/a.png")) // same origin too
+        assertEquals(LinkTarget.Browser, LinkPolicy.forNewWindow("http://192.168.1.20:8000/user/images/a.png")) // same origin too
         assertEquals(LinkTarget.ExternalApp, LinkPolicy.forNewWindow("mailto:a@b.c"))
         assertEquals(LinkTarget.ExternalApp, LinkPolicy.forNewWindow("tel:+123"))
         assertEquals(LinkTarget.ExternalApp, LinkPolicy.forNewWindow("intent://x#Intent;scheme=y;end"))
@@ -47,8 +47,8 @@ class OriginsTest {
     }
 
     @Test fun sameWindowHttpStaysOtherSchemesLeave() {
-        assertNull(LinkPolicy.forMainFrame("https://openrouter.ai/auth")) // Ruling 10: OAuth works
-        assertNull(LinkPolicy.forMainFrame("http://100.101.102.103:8000/"))
+        assertNull(LinkPolicy.forMainFrame("https://openrouter.ai/auth")) // OAuth sign-ins load here
+        assertNull(LinkPolicy.forMainFrame("http://192.168.1.20:8000/"))
         assertNull(LinkPolicy.forMainFrame("about:blank"))
         assertEquals(LinkTarget.ExternalApp, LinkPolicy.forMainFrame("mailto:a@b.c"))
         assertEquals(LinkTarget.ExternalApp, LinkPolicy.forMainFrame("TEL:+123"))

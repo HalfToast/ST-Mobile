@@ -1,0 +1,30 @@
+# Hits tools/check-personal.sh accepts. One per line: <path>:<regex>   # <reason>
+# <path> is exact; <regex> (extended) must match the hit's line. Every entry needs a reason.
+
+# Tailscale as one VPN option
+README.md:a VPN such as Tailscale # Tailscale named as one VPN option
+README.md:^such as Tailscale, or another # Tailscale named as one VPN option
+server/stpanel:Tailscale # stpanel lists a Tailscale address as one way to reach the server, next to Wi-Fi
+
+# The Tailscale-address rule (100.64.0.0/10, fd7a:115c:a1e0::/48, *.ts.net), its messages, its button and their tests
+app/src/main/AndroidManifest.xml:"Open Tailscale" # the Open Tailscale button needs to see Tailscale's package
+app/src/main/java/dev/halftoast/stmobile/MainActivity.kt:Tailscale # the Tailscale-address rule and the Open Tailscale button
+app/src/main/java/dev/halftoast/stmobile/chat/ConnectionMonitor.kt:Tailscale # the VPN is watched only for a Tailscale address
+app/src/main/java/dev/halftoast/stmobile/chat/ConnectionWatch.kt:Tailscale # the VPN going down covers the chat only for a Tailscale address
+app/src/main/java/dev/halftoast/stmobile/chat/UnreachableCase.kt:Tailscale # the Tailscale-address rule and the "Tailscale is off" case
+app/src/main/java/dev/halftoast/stmobile/chat/UnreachableScreen.kt:Tailscale # the Tailscale-only messages and the Open Tailscale button
+app/src/test/java/dev/halftoast/stmobile/chat/ConnectionWatchTest.kt:Tailscale # tests of the Tailscale-address rule
+app/src/test/java/dev/halftoast/stmobile/chat/UnreachableCaseTest.kt:Tailscale # tests of the Tailscale-address rule
+
+# A test that setup errors never say "tablet" or "Tailscale"
+app/src/test/java/dev/halftoast/stmobile/settings/AppSettingsTest.kt:"tablet" in message\.lowercase\(\) \|\| "Tailscale" in message # checks the words are absent
+
+# HyperOS/MIUI only in the README's Xiaomi battery tips
+README.md:On Xiaomi phones \(HyperOS/MIUI\) also # Xiaomi battery tips
+
+# README rewritten in Task 9
+README.md:it offers to open Tailscale # README rewritten in Task 9
+
+# This work's own spec and plan
+docs/superpowers/specs/2026-10-30-general-distribution-design.md:. # archived at the end of this work
+docs/superpowers/plans/2026-10-30-general-distribution.md:. # archived at the end of this work

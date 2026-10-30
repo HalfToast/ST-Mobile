@@ -14,8 +14,8 @@ import org.junit.Test
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class AvatarsTest {
     @Test fun urlEncodesFile() = assertEquals(
-        "http://100.101.102.103:8000/thumbnail?type=avatar&file=Mia%20Vale.png",
-        avatarUrl("http://100.101.102.103:8000/", "Mia Vale.png"),
+        "http://192.168.1.20:8000/thumbnail?type=avatar&file=Mia%20Vale.png",
+        avatarUrl("http://192.168.1.20:8000/", "Mia Vale.png"),
     )
 
     @Test fun failureIsNotCached() = runTest {

@@ -114,7 +114,7 @@ class UnreachableCaseTest {
         assertEquals(ServerAnswer.None, serverAnswerOf(302, "http://100.101.102.103:9000/login", null, SERVER))
         assertEquals(ServerAnswer.None, serverAnswerOf(302, "//portal.carrier.example/login", null, SERVER))
         assertEquals(ServerAnswer.None, serverAnswerOf(302, "http://portal.carrier.example/", null, SERVER))
-        assertEquals(ServerAnswer.LoginRedirect, serverAnswerOf(302, "http://tablet.ts.net/login", null, "http://tablet.ts.net"))
+        assertEquals(ServerAnswer.LoginRedirect, serverAnswerOf(302, "http://mypc.tail1234.ts.net/login", null, "http://mypc.tail1234.ts.net"))
         // End to end: a relative /login counts as ST through the VPN only; a portal's /login never.
         assertEquals(null, connectionVerdict(true, serverAnswerOf(302, "/login", null, SERVER), null, tailscaleHost = true))
         assertEquals(UnreachableCase.TailscaleOff, connectionVerdict(false, serverAnswerOf(302, "/login", null, SERVER), null, tailscaleHost = true))
@@ -134,15 +134,15 @@ class UnreachableCaseTest {
         assertEquals(ConnectFailure.Unreachable, connectFailureOf(NoRouteToHostException("No route to host")))
         assertEquals(ConnectFailure.Unreachable, connectFailureOf(ConnectException("failed to connect: connect failed: ENETUNREACH (Network is unreachable)")))
         assertEquals(ConnectFailure.Unreachable, connectFailureOf(ConnectException("connect failed: EHOSTUNREACH (No route to host)")))
-        assertEquals(ConnectFailure.Other, connectFailureOf(UnknownHostException("tablet")))
+        assertEquals(ConnectFailure.Other, connectFailureOf(UnknownHostException("st-server")))
         assertEquals(ConnectFailure.Other, connectFailureOf(ConnectException(null)))
         assertEquals(null, connectFailureOf(null))
     }
 
     @Test fun hostAndPortOfTheServerUrl() {
         assertEquals("100.101.102.103" to 8000, serverEndpoint("http://100.101.102.103:8000/"))
-        assertEquals("tablet.ts.net" to 80, serverEndpoint("http://tablet.ts.net"))
-        assertEquals("tablet.ts.net" to 443, serverEndpoint("https://tablet.ts.net/st/"))
+        assertEquals("mypc.tail1234.ts.net" to 80, serverEndpoint("http://mypc.tail1234.ts.net"))
+        assertEquals("mypc.tail1234.ts.net" to 443, serverEndpoint("https://mypc.tail1234.ts.net/st/"))
         assertEquals(null, serverEndpoint("not a url"))
     }
 }

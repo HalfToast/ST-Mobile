@@ -13,7 +13,7 @@ import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
- * One-off password login that appends the app's public key line to the tablet's authorized_keys.
+ * One-off password login that appends the app's public key line to the server's authorized_keys.
  * The password is used for this single connection only and is never stored or logged.
  */
 object KeyInstaller {
@@ -79,7 +79,7 @@ object KeyInstaller {
             } catch (e: UserAuthException) {
                 throw SshError.AuthFailed("Password rejected", e)
             } catch (e: IOException) {
-                throw SshError.Unreachable("Can't reach the tablet", e)
+                throw SshError.Unreachable("Can't reach the server", e)
             }
             client.startSession().use { session ->
                 val cmd = session.exec(INSTALL_COMMAND)

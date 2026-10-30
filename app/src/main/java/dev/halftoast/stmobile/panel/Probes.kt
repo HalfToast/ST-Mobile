@@ -83,7 +83,7 @@ object Probes {
     /** True for the only command shapes the app sends: `env NAME='value'… bash|sh|python3 -s|-`, or `echo ok`. */
     fun isSafeCommand(command: String): Boolean = command == "echo ok" || SAFE_COMMAND.matches(command)
 
-    /** Where [wrapDetached] marks running actions for dashboard.sh (`action=`), under the tablet's TMPDIR. */
+    /** Where [wrapDetached] marks running actions for dashboard.sh (`action=`), under the server's TMPDIR. */
     const val ACTION_MARKS = "stmobile-actions"
 
     /** dashboard.sh's copy of its slow lines (counts, git), under TMPDIR; a marked action deletes it when it ends. */

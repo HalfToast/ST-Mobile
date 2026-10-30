@@ -11,7 +11,7 @@ sealed interface HostKeyDecision {
     data object Reject : HostKeyDecision
 }
 
-/** What the tablet presented compared with the pin, for showing to the user before trusting. */
+/** What the server presented compared with the pin, for showing to the user before trusting. */
 sealed interface HostKeyCheck {
     data class Matches(val fingerprint: String) : HostKeyCheck
     data class Unpinned(val presented: String) : HostKeyCheck

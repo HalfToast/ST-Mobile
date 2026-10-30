@@ -204,7 +204,7 @@ fun BackMenu(
                     Box(
                         Modifier
                             .size(ButtonSize)
-                            // HyperOS's edge back-gesture zone otherwise takes taps on the button's outer half.
+                            // The system's edge back-gesture zone otherwise takes taps on the button's outer half.
                             .systemGestureExclusion()
                             .background(Color(if (quit) palette.danger else palette.box), CircleShape)
                             .border(1.dp, Color(if (quit) palette.dangerBorder else palette.border), CircleShape)

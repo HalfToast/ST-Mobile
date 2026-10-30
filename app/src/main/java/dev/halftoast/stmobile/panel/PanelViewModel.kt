@@ -72,12 +72,12 @@ data class PanelUi(
     /** Nothing this app is waiting for runs, so probes may: dashboard.sh itself holds off its `git fetch`. */
     val probesAllowed: Boolean get() = busy == null && !whitelistBusy
 
-    /** An action keeps running on the tablet after this app stopped waiting for it (a timeout, or an earlier process). */
-    val tabletBusy: Boolean get() = dashboard?.runningAction != null
+    /** An action keeps running on the server after this app stopped waiting for it (a timeout, or an earlier process). */
+    val serverBusy: Boolean get() = dashboard?.runningAction != null
 
-    val actionsEnabled: Boolean get() = probesAllowed && !tabletBusy
+    val actionsEnabled: Boolean get() = probesAllowed && !serverBusy
 
-    /** [action] runs: here, or still on the tablet. */
+    /** [action] runs: here, or still on the server. */
     fun isRunning(action: PanelAction): Boolean = busy == action || (busy == null && dashboard?.runningAction == action.subcommand)
 
     /** The mode switch may be used: fresh state, nothing running. */
@@ -111,17 +111,18 @@ internal fun isCoveredBy(ip: String, entries: List<String>): Boolean = entries.a
 
 /**
  * Control Center state. Activity-scoped. Commands that change the server run in [actions]' app-wide
- * scope with `signalOnCancel = false` (Ruling 28): nothing UI-bound can cancel them, and even a timeout
- * only closes the channel instead of sending TERM to a half-done restart or update. This ViewModel
+ * scope with `signalOnCancel = false`: nothing UI-bound can cancel them, and even a timeout only
+ * closes the channel instead of sending TERM to a half-done restart or update. This ViewModel
  * awaits the result to update busy state and the result line; a new instance adopts an action that is
  * still running.
  *
- * Probes never run under an action this app awaits (Ruling 22): a failing probe can drop the shared SSH
- * connection. One that outlived its wait (a timeout) is still marked on the tablet (Probes.wrapDetached):
+ * Probes never run under an action this app awaits: a failing probe can drop the shared SSH connection
+ * under it. One that outlived its wait (a timeout) is still marked on the server (Probes.wrapDetached):
  * the dashboard reports it, buttons stay off until it ends, and dashboard.sh skips its `git fetch` meanwhile.
  *
- * An Update that changed the code only suggests a Restart (Ruling 27): it never reloads Chat. The
- * asset cache is namespaced by `<pkgVersion>@<gitRevision>`, so the next load after the restart uses fresh files.
+ * An Update that changed the code only suggests a Restart: it never reloads Chat, since the old code
+ * keeps serving until the restart. The asset cache is namespaced by `<pkgVersion>@<gitRevision>`, so
+ * the next load after the restart uses fresh files.
  *
  * @param onServerRestarted called once when a fresh dashboard shows the server serving again after a
  *   Start/Restart or after the server was seen down (also if it was started outside the app); wired to
@@ -304,7 +305,7 @@ class PanelViewModel(
                 when {
                     fresh == null -> _ui.update { it.copy(whitelistMessage = "Nothing changed: couldn't re-read config.yaml.") }
                     fresh.enabled != pending.from -> {
-                        val msg = "Whitelist mode changed on the tablet meanwhile. Nothing was toggled; check and try again."
+                        val msg = "Whitelist mode changed on the server meanwhile. Nothing was toggled; check and try again."
                         _ui.update { it.copy(whitelistMessage = msg, lastResult = ActionResult.Failed(msg)) }
                     }
                     else -> {
@@ -382,7 +383,7 @@ class PanelViewModel(
                 throw e // this ViewModel is gone; the action itself keeps running
             } catch (_: SshError.Timeout) {
                 // Actions run detached (Probes.wrapDetached), so giving up here doesn't stop it.
-                ActionResult.StillRunning("${action.label} is taking a while and keeps running on the tablet. The buttons come back when it's done.")
+                ActionResult.StillRunning("${action.label} is taking a while and keeps running on the server. The buttons come back when it's done.")
             } catch (e: Exception) {
                 showError(e)
                 ActionResult.Failed("${action.label} failed: ${describe(e)}")
@@ -417,7 +418,7 @@ class PanelViewModel(
 
     private fun afterSuccess(action: PanelAction, result: ActionResult.Ok) {
         when (action) {
-            // New code runs only after a restart; suggest one. Never reload Chat here (Ruling 27).
+            // New code runs only after a restart; suggest one. Never reload Chat here: the old code serves until then.
             PanelAction.Update -> if (result.message != UP_TO_DATE) _ui.update { it.copy(restartSuggested = true) }
             PanelAction.Start -> {
                 _ui.update { it.copy(restartSuggested = false) }
@@ -435,7 +436,7 @@ class PanelViewModel(
         }
     }
 
-    /** Ruling 18: wait (about [AWAIT_SERVING_TRIES] × [AWAIT_SERVING_INTERVAL_MS]) for a fresh "serving" dashboard. */
+    /** After a Start/Restart, so Chat can reload once the server serves again: wait (about [AWAIT_SERVING_TRIES] × [AWAIT_SERVING_INTERVAL_MS]) for a fresh "serving" dashboard. */
     private fun startAwaitServing() {
         servingTriesLeft = AWAIT_SERVING_TRIES
         awaitServingJob?.cancel()
@@ -542,9 +543,9 @@ class PanelViewModel(
         _ui.update { it.copy(error = describe(e), hostKeyChanged = e is SshError.HostKeyChanged) }
 
     private fun describe(e: Exception): String = when (e) {
-        is SshError.HostKeyChanged -> "The tablet's SSH host key changed. If you expected this, trust the new key in Settings."
+        is SshError.HostKeyChanged -> "The server's SSH host key changed. If you expected this, trust the new key in Settings."
         is SshError.Unreachable, is SshError.Timeout ->
-            "${e.message}. Check that Tailscale is connected on this phone and the tablet is awake."
+            "${e.message}. Check that the server is awake and, if you use a VPN, that it's on."
         is SshError -> e.message ?: "SSH error"
         is InvalidFolderSetting -> e.message
         else -> e.message ?: e.javaClass.simpleName

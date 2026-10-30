@@ -6,7 +6,7 @@ import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.async
 
 /**
- * Runs Control Center commands that change the server in an app-wide scope (Ruling 28), so leaving the
+ * Runs Control Center commands that change the server in an app-wide scope, so leaving the
  * screen, finishing the Activity or clearing the ViewModel never cancels them; a cancelled exec would
  * close the channel mid-way. Remembers the Panel action in flight so a new [PanelViewModel] can show
  * it as busy and pick up its result.

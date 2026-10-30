@@ -154,7 +154,7 @@ fun SettingsScreen(
             StButton("Battery settings", { activity?.let { KeepAliveService.openBatterySettings(it) } }, Modifier.fillMaxWidth())
 
             HorizontalDivider(color = Color(p.border))
-            StSectionTitle("Tablet SSH")
+            StSectionTitle("Server SSH")
             Text(
                 pinned?.let { "Pinned host key: $it" } ?: "No host key pinned. The next connection will pin it.",
                 color = Color(p.muted),
@@ -172,7 +172,7 @@ fun SettingsScreen(
                         try {
                             val check = HostKeyPolicy.check(settings.knownHostKey, shell.presentedHostKey())
                             if (check is HostKeyCheck.Matches) {
-                                keyMessage = "The tablet's host key matches the pinned key."
+                                keyMessage = "The server's host key matches the pinned key."
                             } else {
                                 toConfirm = check
                             }

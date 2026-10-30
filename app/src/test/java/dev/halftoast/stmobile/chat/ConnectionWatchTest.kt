@@ -119,7 +119,7 @@ class ConnectionWatchTest {
         assertEquals(Decision.Probe, watch.onRetry())
         assertEquals(Decision.Cover(UnreachableCase.TailscaleOff), watch.onProbe(UnreachableCase.TailscaleOff, pageLive = true))
         assertEquals(UnreachableCase.TailscaleOff, watch.cover)
-        // The tablet is still asleep once the VPN is back: the case follows.
+        // The server is still asleep once the VPN is back: the case follows.
         assertEquals(Decision.Cover(UnreachableCase.ServerNotAnswering), watch.onProbe(UnreachableCase.ServerNotAnswering, true))
     }
 

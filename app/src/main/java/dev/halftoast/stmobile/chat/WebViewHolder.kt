@@ -594,7 +594,7 @@ class WebViewHolder(
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
                 interceptor?.invoke(request)
 
-            /** Same-window http(s) stays here (Ruling 10); mailto:, tel:, intent: … go to their app. */
+            /** Same-window http(s) stays here (OAuth sign-ins come back to ST); mailto:, tel:, intent: … go to their app. */
             override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                 if (!request.isForMainFrame) return false
                 val target = LinkPolicy.forMainFrame(request.url.toString()) ?: return false

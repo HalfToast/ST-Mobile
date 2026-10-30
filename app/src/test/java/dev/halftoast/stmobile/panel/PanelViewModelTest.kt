@@ -186,7 +186,7 @@ class PanelViewModelTest {
     }
     @Test fun whitelistRejectsBadIpWithoutRunning() = runTest { vm.addWhitelistEntry("1.2.3.4\"); x"); advanceUntilIdle(); assertTrue(shell.commands.none { it.contains("whitelist") && it.contains("stpanel") }); assertNotNull(vm.ui.value.error) }
     @Test fun updateSuggestsRestartButNeverReloadsChat() = runTest {
-        // Ruling 27: a working chat is never reloaded by Update; the suggested Restart does that.
+        // A working chat is never reloaded by Update; the suggested Restart does that.
         vm.request(PanelAction.Update); vm.confirm(); advanceUntilIdle()
         assertTrue(vm.ui.value.restartSuggested)
         assertEquals(0, restartedCalls)
@@ -194,22 +194,22 @@ class PanelViewModelTest {
         assertEquals(ActionResult.Ok("Updated to 123456789"), vm.ui.value.lastAction)
     }
     @Test fun shellFailureShowsErrorAndReenablesActions() = runTest { shell.failWith(SshError.Unreachable("no route")); vm.request(PanelAction.Backup); advanceUntilIdle(); assertNull(vm.ui.value.busy); assertNotNull(vm.ui.value.error) }
-    @Test fun actionTimeoutSaysItKeepsRunningOnTheTablet() = runTest {
+    @Test fun actionTimeoutSaysItKeepsRunningOnTheServer() = runTest {
         shell.actionFailure = SshError.Timeout()
         vm.request(PanelAction.Backup); advanceUntilIdle()
         assertEquals(
-            ActionResult.StillRunning("Backup is taking a while and keeps running on the tablet. The buttons come back when it's done."),
+            ActionResult.StillRunning("Backup is taking a while and keeps running on the server. The buttons come back when it's done."),
             vm.ui.value.lastAction,
         )
         assertNull(vm.ui.value.error)
         assertNull(vm.ui.value.busy)
     }
-    @Test fun anActionStillRunningOnTheTabletKeepsActionsOffButPollsGoOn() = runTest {
+    @Test fun anActionStillRunningOnTheServerKeepsActionsOffButPollsGoOn() = runTest {
         shell.actionFailure = SshError.Timeout()
         shell.dashboards = mutableListOf(ONLINE + "action=backup\n", ONLINE + "action=backup\n", ONLINE)
         vm.request(PanelAction.Backup); advanceUntilIdle()
         assertNull(vm.ui.value.busy)
-        assertTrue(vm.ui.value.tabletBusy)
+        assertTrue(vm.ui.value.serverBusy)
         assertTrue(vm.ui.value.isRunning(PanelAction.Backup))
         assertTrue(!vm.ui.value.actionsEnabled)
         vm.request(PanelAction.Restart); advanceUntilIdle()
@@ -597,7 +597,7 @@ class PanelViewModelTest {
         assertEquals(1, restartedCalls)
     }
 
-    // --- Final review: I2 (Ruling 28) ---
+    // --- Actions run in an app-wide scope and are never signalled: they finish on the server ---
 
     @Test fun actionsNeverAskTheShellToSignal() = runTest {
         vm.request(PanelAction.Backup); advanceUntilIdle()

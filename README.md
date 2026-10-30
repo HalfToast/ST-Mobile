@@ -111,14 +111,9 @@ You can re-run setup or change the server URL, SillyTavern user folder and keep-
 
 ## Known limits
 
-The app was built for one setup (SillyTavern in Termux on a tablet, reached over Tailscale) and has
-only been tested there. In other setups:
-
-- Without a VPN on the phone, an unreachable server is always reported as "Tailscale is off", and
-  some wording still says "tablet".
-- Without a VPN, a server protected by basic auth or a login page counts as unreachable, so the
-  connection-lost cover, once shown after a dropped connection, may not lift by itself.
-- The default SillyTavern URL and SSH host are the author's own, so set yours during setup.
+- Control Center actions expect SillyTavern to run as `node server.js` on the SSH machine, started by
+  stpanel or by hand. If Docker, systemd, pm2 or a launcher runs it, the dashboard may still show it
+  online, but Start, Stop and Restart don't work with those.
 
 ## Keeping the app alive in the background
 

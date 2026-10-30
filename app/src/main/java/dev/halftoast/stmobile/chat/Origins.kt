@@ -56,9 +56,10 @@ object LinkPolicy {
     }
 
     /**
-     * A same-window main-frame navigation. Null: the WebView loads it (http(s) of any origin, Ruling 10;
-     * about:/blob:/data: as Chromium handles them). mailto:, tel:, intent: … go to their app instead of
-     * an "unknown URL scheme" error page; file:/content: are refused.
+     * A same-window main-frame navigation. Null: the WebView loads it (http(s) of any origin, as a browser
+     * does, so OAuth sign-ins and their callbacks work; about:/blob:/data: as Chromium handles them).
+     * mailto:, tel:, intent: … go to their app instead of an "unknown URL scheme" error page;
+     * file:/content: are refused.
      */
     fun forMainFrame(url: String): LinkTarget? = when (scheme(url)) {
         "http", "https", "about", "blob", "data", "javascript" -> null

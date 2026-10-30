@@ -1,6 +1,6 @@
 /*
  * ST Mobile: tells the app when one of SillyTavern's own requests to its server fails at the network
- * level (the tablet asleep, the server stopped, Tailscale off), so it can check the connection and
+ * level (the server asleep, SillyTavern stopped, the VPN off), so it can check the connection and
  * cover the chat instead of letting ST show an empty chat and "could not be saved" errors. Injected at
  * document start by NetWatch.kt.
  *

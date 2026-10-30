@@ -6,7 +6,7 @@ interface RemoteShell {
     /**
      * Runs [command] and returns its output. On timeout or cancellation the session is closed; with
      * [signalOnCancel] TERM is sent to the remote command first. Pass false for commands that must
-     * finish on the tablet regardless (stpanel actions): the channel just closes and they keep going.
+     * finish on the server regardless (stpanel actions): the channel just closes and they keep going.
      */
     suspend fun exec(
         command: String,
@@ -21,7 +21,7 @@ interface RemoteShell {
 data class ExecResult(val exitCode: Int?, val stdout: String, val stderr: String)
 
 sealed class SshError(msg: String) : Exception(msg) {
-    class Unreachable(msg: String = "Can't reach the tablet", cause: Throwable? = null) : SshError(msg) {
+    class Unreachable(msg: String = "Can't reach the server", cause: Throwable? = null) : SshError(msg) {
         init { cause?.let { initCause(it) } }
     }
 
@@ -35,5 +35,5 @@ sealed class SshError(msg: String) : Exception(msg) {
     class NotSetUp(msg: String = "SSH isn't set up. Add the server's SSH details in Settings.") : SshError(msg)
 
     class HostKeyChanged(val expected: String, val actual: String) :
-        SshError("Host key changed: pinned $expected, tablet presented $actual")
+        SshError("Host key changed: pinned $expected, server presented $actual")
 }

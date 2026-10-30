@@ -10,7 +10,7 @@ class ChatStateTest {
     )
 
     @Test fun serverBackReloadsOnlyDeadOrStalledPages() {
-        // Ruling 24 + final review: never Ready, the login form, a page mid-load or an OAuth sign-in.
+        // Never a Ready page, the login form, a page mid-load or an OAuth sign-in.
         assertEquals(
             listOf(ChatState.Stalled, ChatState.Unreachable("x")),
             all.filter { it.reloadWhenServerBack },

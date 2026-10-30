@@ -73,9 +73,9 @@ class StatsViewModel(
     }
 
     private fun describe(e: Exception): String = when (e) {
-        is SshError.HostKeyChanged -> "The tablet's SSH host key changed. If you expected this, trust the new key in Settings."
+        is SshError.HostKeyChanged -> "The server's SSH host key changed. If you expected this, trust the new key in Settings."
         is SshError.Unreachable, is SshError.Timeout ->
-            "${e.message}. Check that Tailscale is connected on this phone and the tablet is awake."
+            "${e.message}. Check that the server is awake and, if you use a VPN, that it's on."
         is SshError -> e.message ?: "SSH error"
         is InvalidFolderSetting -> e.message
         else -> e.message ?: e.javaClass.simpleName

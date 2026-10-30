@@ -7,8 +7,9 @@ sealed interface ChatState {
     /** SillyTavern's login page is showing; the user must sign in. Not an error. */
     data object LoginRequired : ChatState
     /**
-     * The main frame is on another site (e.g. the OpenRouter sign-in, Ruling 10). Shown as it is: no
-     * overlay, no readiness polling. Returning to the server origin goes back to [Loading].
+     * The main frame is on another site (e.g. the OpenRouter sign-in, whose callback must load here).
+     * Shown as it is: no overlay, no readiness polling. Returning to the server origin goes back to
+     * [Loading].
      */
     data object External : ChatState
     /**

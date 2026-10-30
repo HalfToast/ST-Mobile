@@ -28,7 +28,18 @@ class AppSettingsTest {
     @Test fun notSetUpSaysWhereToAddSsh() {
         val message = setupErrorMessage(dev.halftoast.stmobile.ssh.SshError.NotSetUp(), keyStage = false)
         assertTrue(message, "SSH isn't set up" in message && "Settings" in message)
-        assertFalse(message, "tablet" in message)
+    }
+
+    @Test fun setupErrorsSpeakOfTheServerOnly() {
+        val errors = listOf(
+            dev.halftoast.stmobile.ssh.SshError.AuthFailed(), dev.halftoast.stmobile.ssh.SshError.NotSetUp(),
+            dev.halftoast.stmobile.ssh.SshError.Unreachable(), dev.halftoast.stmobile.ssh.SshError.Timeout(),
+            dev.halftoast.stmobile.ssh.SshError.HostKeyChanged("SHA256:a", "SHA256:b"), IllegalStateException("x"),
+        )
+        for (e in errors) for (keyStage in listOf(false, true)) {
+            val message = setupErrorMessage(e, keyStage)
+            assertFalse(message, "tablet" in message.lowercase() || "Tailscale" in message)
+        }
     }
 
     @Test fun defaultSshPortIsTheStandardOne() = assertEquals(22, AppSettings.DEFAULT_SSH_PORT)
