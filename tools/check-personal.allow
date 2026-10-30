@@ -2,8 +2,7 @@
 # <path> is exact; <regex> (extended) must match the hit's line. Every entry needs a reason.
 
 # Tailscale as one VPN option
-README.md:a VPN such as Tailscale # Tailscale named as one VPN option
-README.md:^such as Tailscale, or another # Tailscale named as one VPN option
+README.md:^- \*\*Tailscale\.\*\* Install Tailscale on Windows|with the PC's Tailscale address # the WSL guide's Tailscale option, one way to reach WSL next to Wi-Fi
 server/stpanel:Tailscale/VPN|Tailscale VPN:|\| Tailscale: http|Wi-Fi, Tailscale\) # stpanel lists a Tailscale address as one way to reach the server, next to Wi-Fi
 
 # The Tailscale-address rule (100.64.0.0/10, fd7a:115c:a1e0::/48, *.ts.net), its messages, its button and their tests
@@ -15,15 +14,14 @@ app/src/main/java/dev/halftoast/stmobile/chat/UnreachableCase.kt:Tailscale # the
 app/src/main/java/dev/halftoast/stmobile/chat/UnreachableScreen.kt:isTailscaleServer|onOpenTailscale|TailscaleOff|[oO]pen Tailscale|With Tailscale off|signed out of Tailscale # the Tailscale-only messages and the Open Tailscale button
 app/src/test/java/dev/halftoast/stmobile/chat/ConnectionWatchTest.kt:Tailscale # tests of the Tailscale-address rule
 app/src/test/java/dev/halftoast/stmobile/chat/UnreachableCaseTest.kt:Tailscale # tests of the Tailscale-address rule
+README.md:Tailscale is off on this phone\*\*: only for a server at a Tailscale address|It offers Open Tailscale, and retries|^  Tailscale on and no answer # the README's description of the Tailscale-only message and button
+README.md:The Tailscale-specific messages and the Open Tailscale button|^  a Tailscale address: in `100\.64\.0\.0/10` # Known limits: the Tailscale-address rule
 
 # A test that setup errors never say "tablet" or "Tailscale"
 app/src/test/java/dev/halftoast/stmobile/settings/AppSettingsTest.kt:"tablet" in message\.lowercase\(\) \|\| "Tailscale" in message # checks the words are absent
 
 # HyperOS/MIUI only in the README's Xiaomi battery tips
-README.md:On Xiaomi phones \(HyperOS/MIUI\) also # Xiaomi battery tips
-
-# README rewritten in Task 9
-README.md:it offers to open Tailscale # README rewritten in Task 9
+README.md:On Xiaomi phones \(HyperOS/MIUI\), for example # Xiaomi battery tips
 
 # This work's own spec and plan
 docs/superpowers/specs/2026-10-30-general-distribution-design.md:. # archived at the end of this work
