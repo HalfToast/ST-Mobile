@@ -67,6 +67,7 @@ import dev.halftoast.stmobile.chat.BackAction
 import dev.halftoast.stmobile.chat.BackPressPolicy
 import dev.halftoast.stmobile.chat.ChatScreen
 import dev.halftoast.stmobile.chat.ChatState
+import dev.halftoast.stmobile.chat.ConnectionMonitor
 import dev.halftoast.stmobile.chat.Snapshot
 import dev.halftoast.stmobile.chat.UnreachableActions
 import dev.halftoast.stmobile.chat.UnreachableProbe
@@ -111,6 +112,8 @@ enum class Overlay { None, Settings, Setup }
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 class MainActivity : ComponentActivity() {
     private lateinit var holder: WebViewHolder
+    /** Covers the chat when the connection drops under it, and brings it back. Foreground only. */
+    private lateinit var connection: ConnectionMonitor
     private var chatTabShown = true
     private var lastUnconsumedBackAtMs: Long? = null
 
@@ -153,6 +156,7 @@ class MainActivity : ComponentActivity() {
         val settings = app.settings
         holder = WebViewHolder(this, settings, app.themeStore::update)
         currentHolder = WeakReference(holder)
+        connection = ConnectionMonitor(holder, unreachableProbe, { settings.serverUrl }, lifecycleScope)
         if (settings.keepAliveEnabled) KeepAliveService.start(this) else KeepAliveService.stop(this)
         lifecycleScope.launch {
             holder.state.collect {
@@ -180,6 +184,7 @@ class MainActivity : ComponentActivity() {
                 val imeTarget = WindowInsets.imeAnimationTarget
                 val sheetOpen = holder.sheetOpen.collectAsState()
                 val chatState = holder.state.collectAsState()
+                val chatCover = holder.cover.collectAsState()
                 val density = LocalDensity.current
                 // The native screen drawn over Chat (sliding in, shown, or sliding out); null once Chat
                 // has settled. Chat stays composed under it until it fully covers Chat.
@@ -222,6 +227,18 @@ class MainActivity : ComponentActivity() {
                                 false
                             }
                         },
+                    )
+                }
+                // The same buttons over a chat whose connection dropped; Retry goes to the monitor.
+                val coverActions = remember {
+                    UnreachableActions(
+                        classify = unreachableActions.classify,
+                        vpnUp = unreachableActions.vpnUp,
+                        watchVpn = unreachableActions.watchVpn,
+                        onRetry = connection::retry,
+                        onOpenControlCenter = unreachableActions.onOpenControlCenter,
+                        onOpenTailscale = unreachableActions.onOpenTailscale,
+                        onStartServer = unreachableActions.onStartServer,
                     )
                 }
                 BackHandler {
@@ -293,6 +310,18 @@ class MainActivity : ComponentActivity() {
                                             lastAction = panel.lastAction,
                                         )
                                     },
+                                    covered = { case ->
+                                        val panel by panelVm.ui.collectAsState()
+                                        UnreachableScreen(
+                                            state = ChatState.Unreachable("The connection to SillyTavern was lost."),
+                                            attempt = 0,
+                                            actions = coverActions,
+                                            starting = panel.busy == PanelAction.Start || panel.busy == PanelAction.Restart,
+                                            serverOnline = panel.dashboard?.online == true,
+                                            lastAction = panel.lastAction,
+                                            fixedCase = case,
+                                        )
+                                    },
                                     // Jump straight to the keyboard's final height: following the slide frame
                                     // by frame resizes the WebView, and so re-lays-out SillyTavern, every frame.
                                     modifier = Modifier
@@ -303,7 +332,11 @@ class MainActivity : ComponentActivity() {
                                     position = fab,
                                     containerSize = { chatSize },
                                     hidden = {
-                                        navHidden(imeTarget.getBottom(density), sheetOpen.value, chatState.value is ChatState.Unreachable)
+                                        navHidden(
+                                            imeTarget.getBottom(density),
+                                            sheetOpen.value,
+                                            chatUnreachable = chatState.value is ChatState.Unreachable || chatCover.value != null,
+                                        )
                                     },
                                     onMoved = {
                                         fab = it
@@ -423,12 +456,15 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         panelVm.setAppForeground(true)
+        connection.start()
     }
 
     override fun onStop() {
         panelVm.setAppForeground(false)
+        connection.stop()
         // Not with a list sheet open: the next launch would show a picture of the sheet over the chat.
-        if (chatTabShown && holder.state.value == ChatState.Ready && !holder.sheetOpen.value) {
+        // Nor while the connection is lost: the page under the cover may already be broken.
+        if (chatTabShown && holder.state.value == ChatState.Ready && !holder.sheetOpen.value && holder.cover.value == null) {
             Snapshot.save(this, holder.webView)
         }
         super.onStop()
@@ -445,7 +481,8 @@ class MainActivity : ComponentActivity() {
         if (holder.goBackIfOffOrigin()) return
         // Unreachable, Loading, Stalled, External: the page is hidden or isn't SillyTavern's UI, so
         // don't poke it; plain back (history above, then "press again").
-        if (!holder.state.value.backProbesPage) return onBackDecided(consumed = false)
+        // Covered (connection lost) or not ST's UI: plain back, the page is not poked.
+        if (!holder.state.value.backProbesPage || holder.cover.value != null) return onBackDecided(consumed = false)
         holder.probeBack(::onBackDecided)
     }
 

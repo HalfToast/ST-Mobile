@@ -59,17 +59,19 @@ import dev.halftoast.stmobile.ui.LocalStPalette
 
 /**
  * The chat WebView with its state overlays: a "Reconnecting…" pill (over the last snapshot, which
- * swallows taps) while Loading, a "Still loading… Retry" pill while Stalled, and [unreachable] over
- * everything while Unreachable. The overlays are small layers over the WebView; nothing here resizes
+ * swallows taps) while Loading, a "Still loading… Retry" pill while Stalled, [unreachable] over
+ * everything while Unreachable, and [covered] over a loaded page whose connection was lost. The overlays are small layers over the WebView; nothing here resizes
  * or re-composites it.
  */
 @Composable
 fun ChatScreen(
     holder: WebViewHolder,
     unreachable: @Composable (ChatState.Unreachable) -> Unit,
+    covered: @Composable (UnreachableCase) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state by holder.state.collectAsState()
+    val cover by holder.cover.collectAsState()
     val context = LocalContext.current
     // Decoded off the main thread; re-read (and dropped at once) whenever the snapshot is cleared.
     val cleared by Snapshot.cleared.collectAsState()
@@ -85,6 +87,13 @@ fun ChatScreen(
             onRelease = { holder.detach(it) },
         )
         val pillPlace = Modifier.align(Alignment.TopCenter).padding(top = 12.dp)
+        // The connection dropped under the loaded page: cover it (it stays loaded underneath).
+        cover?.let { case ->
+            if (state.coversOnConnectionLoss) {
+                covered(case)
+                return@Box
+            }
+        }
         when (val s = state) {
             ChatState.Loading -> {
                 snapshot?.let { bitmap ->

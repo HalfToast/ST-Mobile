@@ -117,14 +117,39 @@ class UnreachableProbe(context: Context) {
     /** Off the main thread: the VPN check, then a ~2 s TCP connect to ST's host and port. */
     suspend fun classify(serverUrl: String): UnreachableCase = withContext(Dispatchers.IO) {
         if (!vpnUp()) return@withContext UnreachableCase.TailscaleOff
-        val (host, port) = serverEndpoint(serverUrl) ?: return@withContext UnreachableCase.Other
-        val failure = try {
-            Socket().use { it.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS) }
-            null
-        } catch (e: Exception) {
-            connectFailureOf(e)
+        when (val r = connect(serverUrl)) {
+            Connect.NoUrl -> UnreachableCase.Other
+            Connect.Ok -> classifyUnreachable(vpnUp = true, failure = null)
+            is Connect.Failed -> classifyUnreachable(vpnUp = true, failure = r.failure)
         }
-        classifyUnreachable(vpnUp = true, failure = failure)
+    }
+
+    /**
+     * For a chat that is loaded: null if ST's port answers (with or without a VPN), else why not.
+     * Off the main thread, like [classify]. A URL without a host counts as answering (nothing to say).
+     */
+    suspend fun verdict(serverUrl: String): UnreachableCase? = withContext(Dispatchers.IO) {
+        when (val r = connect(serverUrl)) {
+            Connect.NoUrl, Connect.Ok -> null
+            is Connect.Failed -> probeVerdict(vpnUp(), r.failure)
+        }
+    }
+
+    private sealed interface Connect {
+        data object NoUrl : Connect
+        data object Ok : Connect
+        data class Failed(val failure: ConnectFailure) : Connect
+    }
+
+    /** A ~2 s TCP connect to ST's host:port. */
+    private fun connect(serverUrl: String): Connect {
+        val (host, port) = serverEndpoint(serverUrl) ?: return Connect.NoUrl
+        return try {
+            Socket().use { it.connect(InetSocketAddress(host, port), CONNECT_TIMEOUT_MS) }
+            Connect.Ok
+        } catch (e: Exception) {
+            Connect.Failed(connectFailureOf(e) ?: ConnectFailure.Other)
+        }
     }
 
     /**

@@ -1,0 +1,144 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>net-watch tests</title>
+<script>
+  // Stand-ins, set up before the hook wraps them: the page's fetch and the app's listener.
+  var RESPONSE_OK = new Response('ok', { status: 200 });
+  var RESPONSE_500 = new Response('boom', { status: 500 });
+  var NET_ERROR = new TypeError('Failed to fetch');
+  window.fetch = function (input) {
+    var url = typeof input === 'string' ? input : input.url;
+    if (/\/ok$/.test(url)) return Promise.resolve(RESPONSE_OK);
+    if (/\/500$/.test(url)) return Promise.resolve(RESPONSE_500);
+    if (/\/abort$/.test(url)) return Promise.reject(new DOMException('aborted', 'AbortError'));
+    return Promise.reject(NET_ERROR);
+  };
+  var posted = [];
+  window.STMobileNet = { postMessage: function (m) { posted.push(m); } };
+</script>
+<script src="../../main/assets/web/net-watch.js"></script>
+</head>
+<body>
+<script>
+(function () {
+  function eq(actual, expected, what) {
+    var a = JSON.stringify(actual), e = JSON.stringify(expected);
+    if (a !== e) throw new Error(what + ': expected ' + e + ', got ' + a);
+  }
+  function ok(cond, what) { if (!cond) throw new Error(what); }
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function failures() { return window.__stmNetWatch.failures; }
+
+  var tests = {
+    aNetworkErrorIsReportedAndPassedThrough: function () {
+      var before = failures();
+      return fetch('/api/chats/get').then(function () {
+        throw new Error('should reject');
+      }, function (e) {
+        ok(e === NET_ERROR, 'the same rejection');
+        eq(failures(), before + 1, 'counted');
+        eq(posted, ['fail'], 'posted');
+      });
+    },
+    anHttp500IsNotReported: function () {
+      var before = failures();
+      return fetch('/api/settings/500').then(function (r) {
+        ok(r === RESPONSE_500, 'the same response');
+        eq(failures(), before, 'not counted');
+      });
+    },
+    aSuccessIsNotReported: function () {
+      var before = failures();
+      return fetch(new Request(location.href.replace(/[^/]*$/, '') + 'api/ok')).then(function (r) {
+        ok(r === RESPONSE_OK, 'the same response');
+        eq(failures(), before, 'not counted');
+      });
+    },
+    anAbortIsNotReported: function () {
+      var before = failures();
+      return fetch('/abort').then(null, function (e) {
+        eq(e.name, 'AbortError', 'the same rejection');
+        eq(failures(), before, 'not counted');
+      });
+    },
+    anotherSitesFailureIsNotReported: function () {
+      var before = failures();
+      return fetch('https://other.example/x').then(null, function (e) {
+        ok(e === NET_ERROR, 'the same rejection');
+        eq(failures(), before, 'not counted');
+      });
+    },
+    postsAreSpacedOut: function () {
+      return Promise.all([fetch('/a'), fetch('/b'), fetch('/c')].map(function (p) { return p.catch(function () {}); }))
+        .then(function () {
+          eq(posted, ['fail'], 'one post for a burst');
+          return wait(1100);
+        }).then(function () {
+          return fetch('/d').catch(function () {});
+        }).then(function () {
+          eq(posted, ['fail', 'fail'], 'a later failure posts again');
+        });
+    },
+    xhrStatusZeroIsReported: function () {
+      var before = failures();
+      return new Promise(function (resolve) {
+        var x = new XMLHttpRequest();
+        x.open('GET', 'definitely-missing-file.json');
+        x.addEventListener('loadend', function () { setTimeout(resolve, 0); });
+        x.send();
+      }).then(function () {
+        eq(failures(), before + 1, 'counted');
+      });
+    },
+    xhrAbortIsNotReported: function () {
+      var before = failures();
+      return Promise.resolve().then(function () {
+        return new Promise(function (resolve) {
+          var x = new XMLHttpRequest();
+          x.open('GET', 'definitely-missing-file.json');
+          x.addEventListener('loadend', function () { setTimeout(resolve, 0); });
+          x.send();
+          x.abort();
+        });
+      }).then(function () {
+        eq(failures(), before, 'not counted');
+      });
+    },
+    failsSafeWithoutTheBridge: function () {
+      var bridge = window.STMobileNet;
+      delete window.STMobileNet;
+      var before = failures();
+      return wait(1100).then(function () {
+        return fetch('/e');
+      }).then(null, function (e) {
+        ok(e === NET_ERROR, 'still the same rejection');
+        eq(failures(), before + 1, 'still counted');
+      }).then(function () {
+        window.STMobileNet = bridge;
+      });
+    },
+  };
+
+  function finish(result) { document.body.dataset.result = result; }
+
+  window.addEventListener('load', function () {
+    var names = Object.keys(tests), i = 0;
+    function next() {
+      if (i >= names.length) return finish('PASS');
+      var name = names[i++];
+      // Each test starts after the post spacing has passed, with nothing recorded.
+      wait(name === 'postsAreSpacedOut' ? 1100 : 0).then(function () {
+        posted.length = 0;
+        return tests[name]();
+      }).then(next, function (e) {
+        finish('FAIL: ' + name + ': ' + (e && e.message));
+      });
+    }
+    next();
+  });
+})();
+</script>
+</body>
+</html>

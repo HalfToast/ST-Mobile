@@ -49,6 +49,7 @@ class WebViewHolder(
     private val links = ExternalLinks(activity)
     private val selectSheetScript = SelectSheet.load(activity)
     private val chatBreaksScript = ChatBreaks.load(activity)
+    private val netWatchScript = NetWatch.load(activity)
 
     /** Origin the current WebView's page hooks were installed for. Read on Chromium IO threads too. */
     @Volatile private var serverOrigin: String? = Origins.of(appSettings.serverUrl)
@@ -70,6 +71,17 @@ class WebViewHolder(
      */
     val loadAttempts: StateFlow<Int> = _loadAttempts
 
+    private val _cover = MutableStateFlow<UnreachableCase?>(null)
+    /**
+     * The connection was lost under a loaded page ([ConnectionMonitor]): Chat shows this Unreachable
+     * case over the page, which stays loaded underneath. Only ever set while [state] is one of
+     * [coversOnConnectionLoss]; any other state (a reload, a failed load) drops it.
+     */
+    val cover: StateFlow<UnreachableCase?> = _cover
+
+    /** One of ST's own requests failed at the network level (net-watch.js). Main thread. */
+    var onNetworkFailure: (() -> Unit)? = null
+
     private val _sheetOpen = MutableStateFlow(false)
     /** One of ST's lists is open as a sheet (select-sheet.js). Only ever true while [state] is Ready. */
     val sheetOpen: StateFlow<Boolean> = _sheetOpen
@@ -78,6 +90,25 @@ class WebViewHolder(
     private fun setState(s: ChatState) {
         _state.value = s
         if (s != ChatState.Ready) _sheetOpen.value = false
+        if (!s.coversOnConnectionLoss) _cover.value = null
+    }
+
+    /**
+     * Covers the loaded page with [case] (it stays loaded: no reload, no new WebView), and closes a
+     * list sheet the page has open, since nothing under the cover can be tapped.
+     */
+    fun cover(case: UnreachableCase) {
+        if (destroyed || !_state.value.coversOnConnectionLoss) return
+        if (_cover.value == null) {
+            webView.evaluateJavascript("window.__stmSelectSheet&&window.__stmSelectSheet.close()", null)
+            _sheetOpen.value = false
+        }
+        _cover.value = case
+    }
+
+    /** The connection is back and nothing was lost: show the page exactly as it was. */
+    fun uncover() {
+        _cover.value = null
     }
 
     private val assetCache = AssetCache(File(activity.cacheDir, "asset-cache"))
@@ -412,6 +443,12 @@ class WebViewHolder(
         }
     }
 
+    /** The current, loaded page reported a failed request. */
+    private fun onPageNetworkFailure(view: WebView) {
+        if (destroyed || view !== webView || !_state.value.coversOnConnectionLoss) return
+        onNetworkFailure?.invoke()
+    }
+
     /** The page's sheet opened or closed. An open sheet only counts on the current, Ready page. */
     private fun onSheetMessage(view: WebView, open: Boolean) {
         if (destroyed || view !== webView) return
@@ -505,6 +542,7 @@ class WebViewHolder(
         SelectSheet.installBridge(this, serverOrigin) { open -> onSheetMessage(this, open) }
         SelectSheet.install(this, serverOrigin, selectSheetScript)
         ChatBreaks.install(this, serverOrigin, chatBreaksScript)
+        NetWatch.install(this, serverOrigin, netWatchScript) { onPageNetworkFailure(this) }
 
         webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =

@@ -36,3 +36,10 @@ val ChatState.backProbesPage: Boolean
 /** A live page against a running server, so the Control Center has nothing left to recover. */
 val ChatState.isLiveServerPage: Boolean
     get() = this == ChatState.Ready || this == ChatState.LoginRequired
+
+/**
+ * A loaded server page, so a connection lost under it can be covered (and uncovered without a
+ * reload): Ready, the login form, or a page shown although ST was slow to start (Stalled).
+ */
+val ChatState.coversOnConnectionLoss: Boolean
+    get() = this == ChatState.Ready || this == ChatState.LoginRequired || this == ChatState.Stalled

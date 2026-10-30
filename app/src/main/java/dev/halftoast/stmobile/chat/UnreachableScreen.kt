@@ -52,6 +52,8 @@ class UnreachableActions(
  * case is being worked out, and when the server's port answers, it shows the plain [state] reason.
  * With Tailscale off it retries once each time a VPN comes up (see [VpnRetryGate]).
  * [serverOnline]: the dashboard says the process runs, so Start is off, as in the Control Center.
+ * [fixedCase]: the case is already known (a connection lost under a loaded chat); no classifying and
+ * no VPN auto-retry here, the caller's [UnreachableActions.onRetry] decides.
  */
 @Composable
 fun UnreachableScreen(
@@ -61,15 +63,20 @@ fun UnreachableScreen(
     starting: Boolean,
     serverOnline: Boolean,
     lastAction: ActionResult?,
+    fixedCase: UnreachableCase? = null,
 ) {
     val p = LocalStPalette.current
-    var case by remember { mutableStateOf<UnreachableCase?>(null) }
-    LaunchedEffect(state, attempt) {
-        case = null
-        case = actions.classify()
+    var classified by remember { mutableStateOf<UnreachableCase?>(null) }
+    if (fixedCase == null) {
+        LaunchedEffect(state, attempt) {
+            classified = null
+            classified = actions.classify()
+        }
     }
+    val case = fixedCase ?: classified
 
-    if (case == UnreachableCase.TailscaleOff) {
+    // A lost connection over a loaded page ([fixedCase]) has its own return path (ConnectionMonitor).
+    if (fixedCase == null && case == UnreachableCase.TailscaleOff) {
         val scope = rememberCoroutineScope()
         val retry by rememberUpdatedState(actions.onRetry)
         DisposableEffect(actions) {
