@@ -23,6 +23,3 @@ app/src/test/java/dev/halftoast/stmobile/settings/AppSettingsTest.kt:"tablet" in
 # HyperOS/MIUI only in the README's Xiaomi battery tips
 README.md:On Xiaomi phones \(HyperOS/MIUI\), for example # Xiaomi battery tips
 
-# This work's own spec and plan
-docs/superpowers/specs/2026-10-30-general-distribution-design.md:. # archived at the end of this work
-docs/superpowers/plans/2026-10-30-general-distribution.md:. # archived at the end of this work
