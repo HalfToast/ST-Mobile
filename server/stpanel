@@ -1095,7 +1095,8 @@ const paint = (code, text) => (env.STPANEL_COLOR === "1" ? "\x1b[" + code + "m" 
 const fail = (msg) => { console.error("stpanel: " + msg); process.exit(1); };
 let yaml;
 try {
-    yaml = require(env.STPANEL_YAML);
+    // A relative path would be read as a package name: resolve it against the working folder.
+    yaml = require(require("path").resolve(env.STPANEL_YAML));
 } catch (e) {
     fail("the yaml package was not found in " + env.STPANEL_YAML + " (run npm install in the SillyTavern folder)");
 }

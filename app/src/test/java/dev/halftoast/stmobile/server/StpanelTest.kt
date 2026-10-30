@@ -438,6 +438,14 @@ class StpanelTest {
         assertTrue(text, text.contains("whitelistMode: true"))
     }
 
+    /** A relative ST_DIR: require() would read "My Apps/…/yaml" as a package name, so it is resolved first. */
+    @Test fun whitelistWorksWithARelativeFolder() {
+        val path = whitelistSetup()
+        val r = run("whitelist", "add", "192.168.1.20", path = path, stDirValue = stDir.relativeTo(root).path, cwd = root)
+        assertEquals(r.err, 0, r.code)
+        assertTrue(config.readText().contains("192.168.1.20"))
+    }
+
     @Test fun menuTogglesMode() {
         val path = whitelistSetup()
         val r = run("whitelist", path = path, stdin = "1\n")
