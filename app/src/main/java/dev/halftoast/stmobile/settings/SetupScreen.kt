@@ -111,7 +111,12 @@ fun SetupScreen(
     }
 
     fun connect() {
-        val problem = form.validate() ?: if (password.isEmpty()) "Enter the tablet password" else null
+        val f = form.withDefaultHost()
+        val problem = f.validate() ?: when {
+            !f.hasSsh -> "Enter the SSH user"
+            password.isEmpty() -> "Enter the tablet password"
+            else -> null
+        }
         if (problem != null) {
             error = problem
             return
@@ -121,7 +126,6 @@ fun SetupScreen(
         error = null
         hostKeyChange = null
         busy = true
-        val f = form
         scope.launch {
             var keyStage = false
             var done = false
@@ -234,16 +238,21 @@ fun ConnectionFields(form: ConnectionForm, enabled: Boolean, onChange: (Connecti
         keyboardOptions = noCorrect.copy(keyboardType = KeyboardType.Uri),
         shape = StFieldShape, colors = colors, modifier = Modifier.fillMaxWidth(),
     )
+    val urlHost = defaultSshHost(form.serverUrl)
     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedTextField(
             value = form.host, onValueChange = { onChange(form.copy(host = it)) },
             label = { Text("SSH host") }, singleLine = true, enabled = enabled,
+            placeholder = if (urlHost.isEmpty()) null else {
+                { Text(urlHost) }
+            },
             keyboardOptions = noCorrect.copy(keyboardType = KeyboardType.Uri),
             shape = StFieldShape, colors = colors, modifier = Modifier.weight(2f),
         )
         OutlinedTextField(
             value = form.port, onValueChange = { onChange(form.copy(port = it.filter(Char::isDigit).take(5))) },
             label = { Text("Port") }, singleLine = true, enabled = enabled,
+            supportingText = { Text("Termux uses 8022") },
             keyboardOptions = noCorrect.copy(keyboardType = KeyboardType.Number),
             shape = StFieldShape, colors = colors, modifier = Modifier.weight(1f),
         )
@@ -261,6 +270,15 @@ fun ConnectionFields(form: ConnectionForm, enabled: Boolean, onChange: (Connecti
             { Text(ConnectionForm.ST_USER_DIR_ERROR) }
         },
         keyboardOptions = noCorrect, shape = StFieldShape, colors = colors, modifier = Modifier.fillMaxWidth(),
+    )
+    val stDirValid = ConnectionForm.isValidStDir(form.stDir.trim())
+    OutlinedTextField(
+        value = form.stDir, onValueChange = { onChange(form.copy(stDir = it)) },
+        label = { Text("SillyTavern folder") }, singleLine = true, enabled = enabled,
+        isError = !stDirValid,
+        supportingText = { Text(if (stDirValid) "Leave empty to find it automatically" else ConnectionForm.ST_DIR_ERROR) },
+        keyboardOptions = noCorrect.copy(keyboardType = KeyboardType.Uri),
+        shape = StFieldShape, colors = colors, modifier = Modifier.fillMaxWidth(),
     )
 }
 
@@ -289,21 +307,29 @@ fun TrustHostKeyDialog(check: HostKeyCheck, onConfirm: () -> Unit, onDismiss: ()
 }
 
 internal val ConnectionFormSaver = listSaver<ConnectionForm, String>(
-    save = { listOf(it.serverUrl, it.host, it.port, it.user, it.stUserDir) },
-    restore = { ConnectionForm(it[0], it[1], it[2], it[3], it[4]) },
+    save = { listOf(it.serverUrl, it.host, it.port, it.user, it.stUserDir, it.stDir) },
+    restore = { ConnectionForm(it[0], it[1], it[2], it[3], it[4], it[5]) },
 )
 
 /** The SSH settings [ConnectionForm.saveSsh] writes, with the host key pin it may clear. */
-private data class SshFields(val host: String, val port: Int, val user: String, val stUserDir: String, val hostKey: String?) {
+private data class SshFields(
+    val host: String,
+    val port: Int,
+    val user: String,
+    val stUserDir: String,
+    val stDir: String,
+    val hostKey: String?,
+) {
     fun restore(settings: AppSettings) {
         settings.sshHost = host
         settings.sshPort = port
         settings.sshUser = user
         settings.stUserDir = stUserDir
+        settings.stDir = stDir
         settings.knownHostKey = hostKey
     }
 
     companion object {
-        fun of(s: AppSettings) = SshFields(s.sshHost, s.sshPort, s.sshUser, s.stUserDir, s.knownHostKey)
+        fun of(s: AppSettings) = SshFields(s.sshHost, s.sshPort, s.sshUser, s.stUserDir, s.stDir, s.knownHostKey)
     }
 }

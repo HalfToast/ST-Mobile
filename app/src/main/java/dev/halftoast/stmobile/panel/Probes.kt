@@ -12,6 +12,12 @@ data class RemoteCommand(val command: String, val stdin: String?)
 
 enum class LogKind { Server, Access }
 
+/** A folder in Settings that commands can't use; [message] says which, in words for the user. */
+class InvalidFolderSetting(override val message: String) : IllegalArgumentException(message)
+
+const val INVALID_ST_DIR = "The SillyTavern folder in Settings is invalid"
+const val INVALID_ST_USER_DIR = "The SillyTavern user folder in Settings is invalid"
+
 /** Builds the [RemoteCommand]s for the probe scripts in assets/probes, the stpanel actions and the log tails. */
 object Probes {
     fun dashboard(ctx: Context, stDir: String, userDir: String): RemoteCommand =
@@ -73,7 +79,6 @@ object Probes {
     private val SUBCOMMAND = Regex("[a-z]+")
     private val FILE_NAME = Regex("[A-Za-z0-9_-]+")
     private val SAFE_COMMAND = Regex("""env( [A-Z_]+='[^'\\\n]*')* (bash|sh|python3) (-s|-)""")
-    private val ST_DIR = Regex("""(/|~/)[A-Za-z0-9 ._/+-]*""")
 
     /** True for the only command shapes the app sends: `env NAME='value'… bash|sh|python3 -s|-`, or `echo ok`. */
     fun isSafeCommand(command: String): Boolean = command == "echo ok" || SAFE_COMMAND.matches(command)
@@ -136,15 +141,13 @@ object Probes {
 
     /** Re-checks the (untrusted, possibly pre-validation) folders and puts them in the command line. */
     private fun build(interpreter: String, stDir: String, userDir: String, script: String): RemoteCommand {
-        require(ConnectionForm.isValidStUserDir(userDir)) { "Invalid SillyTavern user folder" }
+        if (!ConnectionForm.isValidStUserDir(userDir)) throw InvalidFolderSetting(INVALID_ST_USER_DIR)
         return RemoteCommand(envCommand(interpreter, stDirVar(stDir) + ("ST_USER" to userDir)), script)
     }
 
-    // Task 5 moves this rule to ConnectionForm.isValidStDir.
     private fun stDirVar(stDir: String): List<Pair<String, String>> {
-        if (stDir.isEmpty()) return emptyList()
-        require(ST_DIR.matches(stDir)) { "Invalid SillyTavern folder" }
-        return listOf("ST_DIR" to stDir)
+        if (!ConnectionForm.isValidStDir(stDir)) throw InvalidFolderSetting(INVALID_ST_DIR)
+        return if (stDir.isEmpty()) emptyList() else listOf("ST_DIR" to stDir)
     }
 
     private fun envCommand(interpreter: String, vars: List<Pair<String, String>>): String {

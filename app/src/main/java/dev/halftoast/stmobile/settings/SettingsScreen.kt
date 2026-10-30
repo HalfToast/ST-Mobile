@@ -112,21 +112,23 @@ fun SettingsScreen(
             StSectionTitle("Connection")
             ConnectionFields(form, enabled = true, onChange = { form = it; message = null })
             StButton("Save", modifier = Modifier.fillMaxWidth(), onClick = {
-                val problem = form.validate()
+                val f = form.withDefaultHost()
+                val problem = f.validate()
                 if (problem != null) {
                     message = problem
                     messageIsError = true
                     return@StButton
                 }
                 val before = Triple(settings.sshHost, settings.sshPort, settings.sshUser)
-                form.saveSsh(settings)
+                f.saveSsh(settings)
                 val sshChanged = before != Triple(settings.sshHost, settings.sshPort, settings.sshUser)
                 // Undispatched + NonCancellable inside close(): the disconnect runs on IO even if we leave now.
                 if (sshChanged) scope.launch(start = CoroutineStart.UNDISPATCHED) { shell.close() }
-                if (form.saveServerUrl(settings)) onServerUrlChanged()
+                if (f.saveServerUrl(settings)) onServerUrlChanged()
+                form = f
                 pinned = settings.knownHostKey
                 messageIsError = false
-                message = if (sshChanged) "Saved. Re-run setup to install the app's key for the new SSH details." else "Saved"
+                message = if (sshChanged && f.hasSsh) "Saved. Re-run setup to install the app's key for the new SSH details." else "Saved"
             })
             message?.let {
                 Text(it, color = Color(if (messageIsError) p.dangerBorder else p.accent))

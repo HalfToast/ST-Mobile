@@ -145,7 +145,7 @@ class MainActivity : ComponentActivity() {
         val app = application as StMobileApp
         viewModelFactory {
             initializer {
-                StatsViewModel(app.remoteShell) { Probes.stats(app, "", app.settings.stUserDir) } // Task 5: settings.stDir
+                StatsViewModel(app.remoteShell) { Probes.stats(app, app.settings.stDir, app.settings.stUserDir) }
             }
         }
     }
@@ -417,6 +417,7 @@ class MainActivity : ComponentActivity() {
                     )
                     else -> LogsScreen(
                         shell = app.remoteShell,
+                        stDir = { app.settings.stDir },
                         onOpenSettings = onOpenSettings,
                     )
                 }

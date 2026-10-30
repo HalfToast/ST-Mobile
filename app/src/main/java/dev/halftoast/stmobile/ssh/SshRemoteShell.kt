@@ -93,10 +93,11 @@ class SshRemoteShell(private val settings: AppSettings, private val keys: KeyMan
         }
 
     /**
-     * Emits stdout lines of [command] (append `2>&1` to include stderr). When the collector stops
-     * early, TERM is sent to the remote command (also if cancellation lands while exec is still
-     * waiting for its reply) and the session is closed. Termux sshd keeps a non-PTY command running
-     * after a plain channel close, so the signal is what stops e.g. `tail -f`.
+     * Emits stdout lines of [command] (to include stderr, redirect it inside the [stdin] script, e.g.
+     * `exec 2>&1`). When the collector stops early, TERM is sent to the remote command (also if
+     * cancellation lands while exec is still waiting for its reply) and the session is closed. Termux
+     * sshd keeps a non-PTY command running after a plain channel close, so the signal is what stops
+     * e.g. `tail -f`.
      */
     override fun stream(command: String, stdin: String?): Flow<String> = channelFlow {
         idle.begin()

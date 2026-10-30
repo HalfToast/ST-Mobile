@@ -86,6 +86,8 @@ class FakeRemoteShell : RemoteShell {
     private var failure: Exception? = null
     /** Thrown by `stpanel` commands only, so probes keep answering. */
     var actionFailure: Exception? = null
+    /** Exit code of `stpanel` commands. */
+    var actionExitCode = 0
 
     fun failWith(e: Exception?) { failure = e }
     fun stdinFor(prefix: String): String? = calls.firstOrNull { it.first.contains(prefix) }?.second
@@ -116,7 +118,7 @@ class FakeRemoteShell : RemoteShell {
                 "✓ Whitelist Mode toggled to: ENABLED\n(Note: Restart SillyTavern for config changes to take effect)\n"
             else -> ""
         }
-        return ExecResult(0, out, "")
+        return ExecResult(if (cmd.startsWith("stpanel")) actionExitCode else 0, out, "")
     }
 
     private fun next(outputs: MutableList<String>): String {
@@ -128,12 +130,11 @@ class FakeRemoteShell : RemoteShell {
     override fun stream(command: String, stdin: String?): Flow<String> = emptyFlow()
 }
 
+/** Builds the dashboard with the real [Probes] rules, so bad folder settings throw as in the app. */
 class FakeProbes : ProbeSource {
-    var invalidUserDir = false
-    override fun dashboard(): RemoteCommand {
-        require(!invalidUserDir) { "Invalid SillyTavern user folder" }
-        return RemoteCommand(DASHBOARD_CMD, "# dashboard.sh")
-    }
+    var stDir = ""
+    var userDir = "default-user"
+    override fun dashboard(): RemoteCommand = Probes.dashboardWith("# dashboard.sh", stDir, userDir)
     override fun whitelist(): RemoteCommand = RemoteCommand(WHITELIST_CMD, "# whitelist.sh")
     override fun action(sub: String, input: String?): RemoteCommand = Probes.actionWith("# stpanel", sub, "", input)
 }
@@ -300,10 +301,23 @@ class PanelViewModelTest {
     }
 
     @Test fun invalidUserDirShowsErrorInsteadOfCrashing() = runTest {
-        probes.invalidUserDir = true
+        probes.userDir = "a'b"
         vm.refresh(); advanceUntilIdle()
-        assertNotNull(vm.ui.value.error)
+        assertEquals("The SillyTavern user folder in Settings is invalid", vm.ui.value.error)
         assertTrue(shell.commands.isEmpty())
+    }
+
+    @Test fun invalidStDirNamesTheSillyTavernFolder() = runTest {
+        probes.stDir = "SillyTavern"
+        vm.refresh(); advanceUntilIdle()
+        assertEquals("The SillyTavern folder in Settings is invalid", vm.ui.value.error)
+        assertTrue(shell.commands.isEmpty())
+    }
+
+    @Test fun exit127SaysAToolIsMissingOnTheServer() = runTest {
+        shell.actionExitCode = 127
+        vm.request(PanelAction.Start); advanceUntilIdle()
+        assertEquals(ActionResult.Failed("bash or a tool stpanel needs is missing on the server"), vm.ui.value.lastAction)
     }
 
     @Test fun hostKeyChangedIsFlagged() = runTest {

@@ -1,5 +1,6 @@
 package dev.halftoast.stmobile.stats
 
+import dev.halftoast.stmobile.panel.Probes
 import dev.halftoast.stmobile.panel.RemoteCommand
 import dev.halftoast.stmobile.ssh.ExecResult
 import dev.halftoast.stmobile.ssh.RemoteShell
@@ -30,10 +31,13 @@ class StatsViewModelTest {
         override fun stream(command: String, stdin: String?): Flow<String> = emptyFlow()
     }
 
-    private fun errorFor(result: ExecResult): String? {
+    private fun errorFor(
+        result: ExecResult,
+        probe: () -> RemoteCommand = { RemoteCommand("env ST_USER='default-user' python3 -", "") },
+    ): String? {
         var error: String? = null
         runTest(dispatcher) {
-            val vm = StatsViewModel(Answer(result)) { RemoteCommand("env ST_USER='default-user' python3 -", "") }
+            val vm = StatsViewModel(Answer(result), probe)
             vm.refresh()
             advanceUntilIdle()
             error = vm.ui.value.error
@@ -57,5 +61,17 @@ class StatsViewModelTest {
             errorFor(ExecResult(1, "", "Traceback (most recent call last):\nPermissionError: denied\n")),
         )
         assertEquals("Couldn't read the stats: bash: no", errorFor(ExecResult(127, "", "bash: no\n")))
+    }
+
+    @Test fun badFolderSettingsAreNamed() {
+        val ok = ExecResult(0, "", "")
+        assertEquals(
+            "The SillyTavern folder in Settings is invalid",
+            errorFor(ok) { Probes.statsWith("x", "SillyTavern", "default-user") },
+        )
+        assertEquals(
+            "The SillyTavern user folder in Settings is invalid",
+            errorFor(ok) { Probes.statsWith("x", "", "a'b") },
+        )
     }
 }

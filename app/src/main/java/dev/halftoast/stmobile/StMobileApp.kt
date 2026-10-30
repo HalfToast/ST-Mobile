@@ -9,6 +9,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
 import dev.halftoast.stmobile.panel.ActionTracker
 import dev.halftoast.stmobile.settings.AppSettings
+import dev.halftoast.stmobile.settings.legacyServerUrl
 import dev.halftoast.stmobile.ssh.AndroidKeystoreWrapper
 import dev.halftoast.stmobile.ssh.KeyManager
 import dev.halftoast.stmobile.ssh.SshRemoteShell
@@ -54,6 +55,8 @@ class StMobileApp : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // Installs from before the built-in address keep opening straight to Chat.
+        legacyServerUrl(settings.hasServerUrl, settings.setupComplete, settings.sshHost)?.let { settings.serverUrl = it }
         // Android's built-in "BC" is a stripped-down BouncyCastle; sshj needs the full provider.
         Security.removeProvider("BC")
         Security.insertProviderAt(BouncyCastleProvider(), 1)

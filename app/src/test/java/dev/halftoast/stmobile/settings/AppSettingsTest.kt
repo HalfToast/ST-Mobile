@@ -2,16 +2,26 @@ package dev.halftoast.stmobile.settings
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppSettingsTest {
     @Test fun acceptsHttpUrlWithPort() = assertTrue(AppSettings.isValidServerUrl("http://100.101.102.103:8000"))
-    @Test fun acceptsHttps() = assertTrue(AppSettings.isValidServerUrl("https://tablet.tailnet.ts.net"))
+    @Test fun acceptsHttps() = assertTrue(AppSettings.isValidServerUrl("https://server.tailnet.ts.net"))
     @Test fun rejectsMissingScheme() = assertFalse(AppSettings.isValidServerUrl("100.101.102.103:8000"))
     @Test fun rejectsBlank() = assertFalse(AppSettings.isValidServerUrl(" "))
-    @Test fun defaultsMatchSpec() {
-        assertEquals("http://100.101.102.103:8000", AppSettings.DEFAULT_SERVER_URL)
-        assertEquals("100.101.102.103", AppSettings.DEFAULT_SSH_HOST)
+
+    @Test fun defaultSshPortIsTheStandardOne() = assertEquals(22, AppSettings.DEFAULT_SSH_PORT)
+
+    @Test fun legacyUrlForSetUpInstallsWithoutASavedUrl() {
+        assertEquals("http://100.101.102.103:8000", legacyServerUrl(false, true, "100.101.102.103"))
+        assertEquals("http://[fd7a:115c:a1e0::1]:8000", legacyServerUrl(false, true, "fd7a:115c:a1e0::1"))
+    }
+
+    @Test fun noLegacyUrlOtherwise() {
+        assertNull(legacyServerUrl(true, true, "100.101.102.103")) // URL saved
+        assertNull(legacyServerUrl(false, false, "100.101.102.103")) // never set up
+        assertNull(legacyServerUrl(false, true, "")) // no SSH host to take it from
     }
 }

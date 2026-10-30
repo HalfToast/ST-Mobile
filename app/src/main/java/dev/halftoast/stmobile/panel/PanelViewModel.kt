@@ -19,7 +19,7 @@ import kotlinx.coroutines.sync.withLock
 
 /**
  * The probe and action commands. Over [Probes] in the app; faked in tests. Each throws
- * [IllegalArgumentException] if a configured SillyTavern folder is invalid.
+ * [InvalidFolderSetting] if a configured SillyTavern folder is invalid.
  */
 interface ProbeSource {
     fun dashboard(): RemoteCommand
@@ -30,10 +30,9 @@ interface ProbeSource {
 
 /** Reads the folders from settings on every call, so a change in Settings applies on the next poll. */
 class AndroidProbeSource(private val context: Context, private val settings: AppSettings) : ProbeSource {
-    private val stDir = "" // Task 5: settings.stDir
-    override fun dashboard() = Probes.dashboard(context, stDir, settings.stUserDir)
-    override fun whitelist() = Probes.whitelist(context, stDir)
-    override fun action(sub: String, input: String?) = Probes.action(context, sub, stDir, input)
+    override fun dashboard() = Probes.dashboard(context, settings.stDir, settings.stUserDir)
+    override fun whitelist() = Probes.whitelist(context, settings.stDir)
+    override fun action(sub: String, input: String?) = Probes.action(context, sub, settings.stDir, input)
 }
 
 enum class PanelAction(val label: String, val subcommand: String) {
@@ -547,12 +546,12 @@ class PanelViewModel(
         is SshError.Unreachable, is SshError.Timeout ->
             "${e.message}. Check that Tailscale is connected on this phone and the tablet is awake."
         is SshError -> e.message ?: "SSH error"
-        is IllegalArgumentException -> "The SillyTavern user folder in Settings is invalid"
+        is InvalidFolderSetting -> e.message
         else -> e.message ?: e.javaClass.simpleName
     }
 
     private fun stpanelMissing(r: ExecResult): ActionResult.Failed? =
-        if (r.exitCode == 127) ActionResult.Failed("stpanel was not found on the tablet") else null
+        if (r.exitCode == 127) ActionResult.Failed("bash or a tool stpanel needs is missing on the server") else null
 
     private fun firstLine(s: String): String? =
         stripAnsi(s).lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }?.take(120)

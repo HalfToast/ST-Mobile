@@ -56,8 +56,6 @@ private val LogKind.label: String
         LogKind.Access -> "Access"
     }
 
-private const val ST_DIR = "" // Task 5: settings.stDir
-
 /** One shown line: [id] keeps rows stable while old lines drop off the top; [tone] is worked out once. */
 private class LogLine(val id: Long, val text: String, val tone: LogTone)
 
@@ -68,10 +66,10 @@ internal fun <T> appendCapped(lines: List<T>, line: T, max: Int = MAX_LINES): Li
 /**
  * Live `tail -F`. The stream is collected inside [LaunchedEffect] (keyed on the Server/Access switch),
  * wrapped in repeatOnLifecycle(STARTED): leaving the tab, switching, or backgrounding the app cancels
- * the collector, which makes the shell TERM the remote tail.
+ * the collector, which makes the shell TERM the remote tail. [stDir] is read at every (re)start.
  */
 @Composable
-fun LogsScreen(shell: RemoteShell, onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
+fun LogsScreen(shell: RemoteShell, stDir: () -> String, onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
     var kind by rememberSaveable { mutableStateOf(LogKind.Server) }
     var lines by remember { mutableStateOf(emptyList<LogLine>()) }
     var nextId by remember { mutableLongStateOf(0L) }
@@ -87,7 +85,7 @@ fun LogsScreen(shell: RemoteShell, onOpenSettings: () -> Unit, modifier: Modifie
             error = null
             hostKeyChanged = false
             try {
-                val tail = Probes.tail(kind, ST_DIR)
+                val tail = Probes.tail(kind, stDir())
                 shell.stream(tail.command, tail.stdin).collect { raw ->
                     val line = stripAnsi(raw).trimEnd('\r')
                     lines = appendCapped(lines, LogLine(nextId++, line, logTone(line)))

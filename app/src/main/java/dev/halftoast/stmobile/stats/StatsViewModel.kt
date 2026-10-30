@@ -3,6 +3,7 @@ package dev.halftoast.stmobile.stats
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import dev.halftoast.stmobile.panel.CharacterStat
+import dev.halftoast.stmobile.panel.InvalidFolderSetting
 import dev.halftoast.stmobile.panel.RemoteCommand
 import dev.halftoast.stmobile.panel.parseStats
 import dev.halftoast.stmobile.ssh.RemoteShell
@@ -76,7 +77,7 @@ class StatsViewModel(
         is SshError.Unreachable, is SshError.Timeout ->
             "${e.message}. Check that Tailscale is connected on this phone and the tablet is awake."
         is SshError -> e.message ?: "SSH error"
-        is IllegalArgumentException -> "The SillyTavern user folder in Settings is invalid"
+        is InvalidFolderSetting -> e.message
         else -> e.message ?: e.javaClass.simpleName
     }
 }
