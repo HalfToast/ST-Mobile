@@ -359,8 +359,10 @@ There is no tab bar and nothing floats over the chat. Back is the menu: it first
 or whatever SillyTavern has open (a drawer, a popup, a dropdown's list). With nothing open, it dims the
 chat and slides in a column of buttons, low down on the side you swiped from (the right with the
 3-button navigation): Control Center, Stats, Logs, Reload, which reloads SillyTavern straight away, and
-Quit, which sends the app to the background the way Home does (SillyTavern stays loaded). Back or a tap
-outside closes the menu. Back never leaves the app by itself.
+Quit, which closes the app completely, notification included (SillyTavern keeps running on the server;
+the chat reloads next time). Quit takes two taps: the first turns it into "Are you sure?" with a check
+mark for three seconds, the second quits. Back or a tap outside closes the
+menu. Back never leaves the app by itself; Home sends it to the background with SillyTavern still loaded.
 
 Those screens open full screen with a slim top bar. It has a back arrow, buttons for the other two
 screens, and on the Control Center a Settings gear. Until SSH is set up, all three show the setup form

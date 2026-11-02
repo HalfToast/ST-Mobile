@@ -57,3 +57,17 @@ class MenuBottomGapTest {
         assertEquals(280f, menuBottomGapDp(600f))
     }
 }
+
+class QuitConfirmTest {
+    @Test fun theFirstTapAsksTheSecondQuits() {
+        assertEquals(QuitTap.Ask, quitTap(asking = false))
+        assertEquals(QuitTap.Quit, quitTap(asking = true))
+    }
+
+    @Test fun theLabelAsksWhileWaitingForTheSecondTap() {
+        assertEquals("Quit", quitLabel(asking = false))
+        assertEquals("Are you sure?", quitLabel(asking = true))
+    }
+
+    @Test fun theQuestionGoesAwayOnItsOwn() = assertEquals(3_000L, QUIT_ASK_MS)
+}

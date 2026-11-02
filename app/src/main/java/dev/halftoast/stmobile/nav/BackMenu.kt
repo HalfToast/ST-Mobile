@@ -2,10 +2,17 @@ package dev.halftoast.stmobile.nav
 
 import androidx.activity.BackEventCompat
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
@@ -38,10 +45,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.PathMeasure
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.graphics.vector.addPathNodes
 import androidx.compose.ui.input.pointer.pointerInput
@@ -51,6 +61,7 @@ import dev.halftoast.stmobile.Screen
 import dev.halftoast.stmobile.ui.AnimMs
 import dev.halftoast.stmobile.ui.LocalStPalette
 import dev.halftoast.stmobile.ui.stPressIndication
+import kotlinx.coroutines.delay
 
 /** The screen side the back menu opens on. */
 enum class MenuEdge { Left, Right }
@@ -67,6 +78,17 @@ enum class MenuItem(val screen: Screen?, val label: String) {
     Reload(null, "Reload"),
     Quit(null, "Quit"),
 }
+
+/** What a tap on Quit does: the first one asks ([Ask]), a second one while asking quits. */
+enum class QuitTap { Ask, Quit }
+
+fun quitTap(asking: Boolean): QuitTap = if (asking) QuitTap.Quit else QuitTap.Ask
+
+/** Quit's label: the question while waiting for the second tap. */
+fun quitLabel(asking: Boolean): String = if (asking) "Are you sure?" else MenuItem.Quit.label
+
+/** How long Quit keeps asking before it goes back to plain Quit. */
+const val QUIT_ASK_MS = 3_000L
 
 /** Where the menu opens: the [edge], and the room (dp) left under its column ([menuBottomGapDp]). */
 data class MenuSpot(val edge: MenuEdge, val bottomGapDp: Float)
@@ -102,6 +124,8 @@ private val IconSize = 20.dp
 private val EdgeMargin = 14.dp
 private val Spacing = 10.dp
 private const val ScrimAlpha = 0.45f
+/** Quit's change to "Are you sure?" and back. */
+private const val AskMs = 320
 /** How far (in button widths) a button starts beyond the screen edge. */
 private const val SlideIn = 1.5f
 
@@ -110,7 +134,9 @@ private const val SlideIn = 1.5f
  * dimmed chat and a column of round buttons with labels on [spot]'s edge, low down (just above the
  * message box), sliding in from that edge.
  * Back or a tap outside closes it ([onDismiss]); a button closes it and then runs ([onOpen] for the
- * screens, [onReload], [onQuit]). [debugLongPress] (debug builds only) runs on a long press on Reload.
+ * screens, [onReload]). Quit takes two taps: the first turns it into "Are you sure?" with a check
+ * drawing in where the exit arrow was (for [QUIT_ASK_MS]), the second closes the menu and runs [onQuit].
+ * [debugLongPress] (debug builds only) runs on a long press on Reload.
  *
  * Call it inside the Chat box, after the chat, only while open (it composes nothing otherwise).
  */
@@ -141,6 +167,17 @@ fun BackMenu(
     }
 
     BackHandler { close() }
+
+    // Quit's question: 0 = plain Quit, 1 = "Are you sure?" with the check drawn.
+    var asking by remember { mutableStateOf(false) }
+    val ask = remember { Animatable(0f) }
+    LaunchedEffect(asking) {
+        ask.animateTo(if (asking) 1f else 0f, tween(AskMs, easing = FastOutSlowInEasing))
+        if (asking) {
+            delay(QUIT_ASK_MS)
+            asking = false
+        }
+    }
 
     val left = spot.edge == MenuEdge.Left
     val count = MenuItem.entries.size
@@ -179,26 +216,36 @@ fun BackMenu(
                                 { close(debugLongPress) }
                             } else null,
                         ) {
-                            close {
-                                when (item) {
-                                    MenuItem.Reload -> onReload()
-                                    MenuItem.Quit -> onQuit()
-                                    else -> item.screen?.let(onOpen)
+                            when {
+                                !quit -> close {
+                                    if (item == MenuItem.Reload) onReload() else item.screen?.let(onOpen)
                                 }
+                                quitTap(asking) == QuitTap.Ask -> asking = true
+                                else -> close(onQuit)
                             }
                         },
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     val label = @Composable {
-                        Text(
-                            item.label,
-                            color = Color(palette.text),
-                            fontSize = 13.sp,
-                            modifier = Modifier
-                                .background(Color(palette.box), RoundedCornerShape(6.dp))
-                                .padding(horizontal = 9.dp, vertical = 4.dp),
-                        )
+                        val pill = Modifier
+                            .background(Color(palette.box), RoundedCornerShape(6.dp))
+                            .padding(horizontal = 9.dp, vertical = 4.dp)
+                        if (!quit) {
+                            Text(item.label, color = Color(palette.text), fontSize = 13.sp, modifier = pill)
+                        } else {
+                            // The pill grows toward the screen's middle; the words cross-fade with a small rise.
+                            AnimatedContent(
+                                targetState = asking,
+                                modifier = pill,
+                                contentAlignment = if (left) Alignment.CenterStart else Alignment.CenterEnd,
+                                transitionSpec = {
+                                    (fadeIn(tween(AskMs)) + slideInVertically(tween(AskMs)) { it / 3 }) togetherWith
+                                        (fadeOut(tween(AskMs / 2)) + slideOutVertically(tween(AskMs)) { -it / 3 })
+                                },
+                                label = "quit label",
+                            ) { a -> Text(quitLabel(a), color = Color(palette.text), fontSize = 13.sp) }
+                        }
                     }
                     if (!left) label()
                     Box(
@@ -211,11 +258,53 @@ fun BackMenu(
                             .indication(press, stPressIndication(CircleShape)),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Icon(item.icon, contentDescription = null, Modifier.size(IconSize), tint = Color(palette.text))
+                        if (!quit) {
+                            Icon(item.icon, contentDescription = null, Modifier.size(IconSize), tint = Color(palette.text))
+                        } else {
+                            QuitIcon(ask = { ask.value }, tint = Color(palette.text))
+                        }
                     }
                     if (left) label()
                 }
             }
+        }
+    }
+}
+
+/**
+ * Quit's icon while [ask] runs 0 to 1: the exit arrow shrinks and fades as it turns away, then a
+ * check is drawn in, stroke by stroke, in the same line style. Read in the draw phase only.
+ */
+@Composable
+private fun QuitIcon(ask: () -> Float, tint: Color) {
+    Box(Modifier.size(IconSize), contentAlignment = Alignment.Center) {
+        Icon(
+            NavIcons.Quit,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(IconSize).graphicsLayer {
+                val t = (ask() / 0.6f).coerceIn(0f, 1f)
+                alpha = 1f - t
+                scaleX = 1f - 0.4f * t
+                scaleY = 1f - 0.4f * t
+                rotationZ = -30f * t
+            },
+        )
+        val check = remember { Path() }
+        val measure = remember { PathMeasure() }
+        val drawn = remember { Path() }
+        Canvas(Modifier.size(IconSize)) {
+            val t = ((ask() - 0.35f) / 0.65f).coerceIn(0f, 1f)
+            if (t <= 0f) return@Canvas
+            val u = size.width / 24f
+            check.reset()
+            check.moveTo(5f * u, 12.5f * u)
+            check.lineTo(10f * u, 17.5f * u)
+            check.lineTo(19f * u, 7f * u)
+            measure.setPath(check, false)
+            drawn.reset()
+            measure.getSegment(0f, measure.length * FastOutSlowInEasing.transform(t), drawn, true)
+            drawPath(drawn, tint, style = Stroke(width = 1.8f * u, cap = StrokeCap.Round, join = StrokeJoin.Round))
         }
     }
 }

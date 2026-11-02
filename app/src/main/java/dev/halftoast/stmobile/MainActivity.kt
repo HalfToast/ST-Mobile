@@ -4,6 +4,7 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Process
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
@@ -119,6 +120,8 @@ class MainActivity : ComponentActivity() {
     private var backMenu by mutableStateOf<MenuSpot?>(null)
     /** The side the last back gesture came from ([androidx.activity.BackEventCompat.swipeEdge]). */
     private var lastBackEdge: Int? = null
+    /** Quit was confirmed: the process ends once this Activity is destroyed (after onStop's snapshot). */
+    private var quitting = false
 
     /**
      * Activity-scoped so actions outlive tab switches. It can outlive this Activity instance, so its
@@ -369,7 +372,7 @@ class MainActivity : ComponentActivity() {
                                         onOpen = { screen = it },
                                         // The user asked for it: no "never reload a working chat" guard here.
                                         onReload = { holder.reload() },
-                                        onQuit = { moveTaskToBack(true) },
+                                        onQuit = ::quit,
                                         // Debug only: long-press Reload kills the renderer to test recovery.
                                         debugLongPress = if (BuildConfig.DEBUG) {
                                             {
@@ -481,6 +484,18 @@ class MainActivity : ComponentActivity() {
         val clear = android.graphics.Color.TRANSPARENT
         val style = if (light) SystemBarStyle.light(clear, clear) else SystemBarStyle.dark(clear)
         enableEdgeToEdge(style, style)
+    }
+
+    /** Closes the app for good: the keep-alive notification, this task, then the process. */
+    private fun quit() {
+        quitting = true
+        KeepAliveService.stop(this)
+        finishAndRemoveTask()
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        if (quitting) Process.killProcess(Process.myPid())
     }
 
     override fun onStart() {
