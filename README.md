@@ -483,3 +483,12 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 or copy the APK to the phone and open it (allow installing from that source when Android asks). On
 Xiaomi phones, `adb install` shows a prompt on the phone that must be accepted within a few seconds, or
 the install fails with `INSTALL_FAILED_USER_RESTRICTED`.
+
+## License
+
+ST Mobile, including `server/stpanel`, is licensed under the
+[GNU Affero General Public License v3.0](LICENSE), the same license as SillyTavern.
+
+ST Mobile is an independent project, not made by or affiliated with the SillyTavern team. The app icon
+and notification icon are drawn from SillyTavern's logo. The bundled Noto Sans and Noto Sans Mono fonts
+are under the SIL Open Font License 1.1 (`app/src/main/assets/licenses/OFL-NotoSans.txt`).
