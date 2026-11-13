@@ -20,6 +20,11 @@
  * - Any failure while opening returns false, and the native list opens as before.
  * - Tells the app when it opens and closes (STMobileSheet web message listener, "open" / "closed"),
  *   so the app's floating button can step out of the way. "closed" only ever follows an "open".
+ * - SillyTavern's model lists (OpenRouter, NanoGPT, Chutes, Electron Hub, AI/ML API) show, under each
+ *   name, the details ST's desktop dropdowns show (context size, price, capabilities, subscription);
+ *   ST skips those templates on phones. They come from ST's own live model list, read from its
+ *   openai.js module once the page has loaded; until then, or for a model it doesn't know, the row
+ *   has an empty second line. Every row of such a list is two lines tall.
  * - Never logs: option text is page data.
  */
 (function () {
@@ -90,6 +95,10 @@
     S + '.stm-row.stm-selected{padding-right:40px;}',
     S + '.stm-row.stm-selected::after{content:"\\2713";color:' + ACCENT + ';position:absolute;right:16px;top:11px;}',
     S + '.stm-row.stm-disabled{opacity:.4;cursor:default;}',
+    // Model lists: the name, then a smaller line of details; each line ellipsised on its own.
+    S + '.stm-name,' + S + '.stm-meta{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+    S + '.stm-meta{font-size:.8em;color:' + MUTED + ';margin-top:2px;}',
+    S + '.stm-meta i{margin-right:5px;}',
     S + '.stm-divider{height:9px;padding:4px 16px;background:' + BORDER + ' content-box;}',
     S + '.stm-group{padding:10px 16px 4px;font-size:.8em;font-weight:600;color:' + MUTED + ';}',
     S + '.stm-empty{padding:16px;text-align:center;color:' + MUTED + ';}',
@@ -120,6 +129,18 @@
       '<div class="stm-empty" hidden>No matches</div>' +
       '<div class="stm-foot"><button type="button" class="stm-done">Done</button></div>' +
     '</div>';
+
+  // Model lists ST describes on desktop, by select id, and which of its templates each follows.
+  var MODEL_SOURCES = {
+    model_openrouter_select: 'openrouter',
+    model_nanogpt_select: 'nanogpt',
+    model_chutes_select: 'chutes',
+    model_electronhub_select: 'electronhub',
+    model_aimlapi_select: 'aimlapi',
+  };
+  var models = null;        // () => ST's live model_list, once its module was reached
+  var modelsLoading = false;
+  var rich = false;         // the open list shows model details
 
   var root = null, panel, head, titleEl, search, list, spacer, empty, foot;
   // The open list: every shown option once, then what the list shows now (search applied).
@@ -206,16 +227,110 @@
     return el.hidden || el.style.display === 'none' || el.classList.contains('displayNone');
   }
 
+  /**
+   * Reaches ST's model list through its openai.js module (the module ST itself loaded, so its live
+   * export). Only once the page has loaded, so it never runs ST's modules out of order; never if the
+   * page isn't SillyTavern's. [then] runs once the list is reachable.
+   */
+  function loadModels(then) {
+    if (models) { if (then) then(); return; }
+    if (modelsLoading || document.readyState !== 'complete') return;
+    var tag = document.querySelector('script[type="module"][src$="script.js"]');
+    if (!tag) return;
+    modelsLoading = true;
+    import(new URL('scripts/openai.js', tag.src).href).then(function (m) {
+      if (m && 'model_list' in m) models = function () { return m.model_list; };
+      modelsLoading = false;
+      if (models && then) then();
+    }, function () { modelsLoading = false; });
+  }
+
+  function ctxText(n) {
+    n = Number(n);
+    if (!isFinite(n) || n <= 0) return 'Unknown ctx';
+    if (n >= 1e6) return Math.round(n / 1e5) / 10 + 'M ctx';
+    if (n >= 1000) return Math.round(n / 1000) + 'k ctx';
+    return n + ' ctx';
+  }
+
+  function icon(fa, title) { return { fa: fa, title: title }; }
+
+  /**
+   * A model's details as parts joined by " · ": plain text, or {icons, text} (icons then words).
+   * Follows ST's desktop templates for each source (getNanoGptModelTemplate and friends).
+   */
+  function describeModel(source, m) {
+    var p = m.pricing || {}, icons = [], text = '', price;
+    if (source === 'aimlapi') return [String(m.id).split('/')[0]];
+    if (source === 'openrouter') {
+      var prompt = Number(p.prompt);
+      price = prompt === 0 ? 'Free' : (Math.round(1 / (1000 * prompt) * 1000) / 1000).toFixed(0) + 'k t/$';
+      return isFinite(prompt) ? [ctxText(m.context_length), price] : [ctxText(m.context_length)];
+    }
+    if (source === 'nanogpt') {
+      var pin = p.prompt, pout = p.completion;
+      price = pin === undefined || pout === undefined ? 'Unknown'
+        : pin === 0 && pout === 0 ? 'Free'
+          : '$' + Math.round(pin * 100) / 100 + '/$' + Math.round(pout * 100) / 100 + ' in/out Mtoken';
+      var caps = m.capabilities || {};
+      if (caps.vision) icons.push(icon('fa-eye', 'Vision'));
+      if (caps.reasoning) icons.push(icon('fa-brain', 'Reasoning'));
+      if (caps.tool_calling) icons.push(icon('fa-wrench', 'Tool calling'));
+      var sub = m.subscription;
+      if (sub && sub.included) {
+        icons.push(icon('fa-crown', 'Included in subscription'));
+        var x = sub.inputTokenMultiplier;
+        text = 'Sub' + (x && x !== 1 ? ' (' + x + 'x)' : '');
+      } else if (sub && sub.note) {
+        icons.push(icon('fa-circle-info', String(sub.note)));
+        text = 'Not in Sub';
+      }
+      return withExtras([ctxText(m.context_length), price], icons, text);
+    }
+    var pi = p.input, po = p.output;
+    if (source === 'chutes') {
+      price = pi === undefined || po === undefined ? 'Unknown'
+        : pi === 0 && po === 0 ? 'Free' : '$' + pi + '/$' + po + ' in/out Mtoken';
+      var mods = m.input_modalities || [], feats = m.supported_features || [];
+      if (mods.indexOf('image') >= 0) icons.push(icon('fa-eye', 'Vision'));
+      if (feats.indexOf('reasoning') >= 0) icons.push(icon('fa-brain', 'Reasoning'));
+      if (feats.indexOf('structured_outputs') >= 0) icons.push(icon('fa-wrench', 'Tool calling'));
+      return withExtras([ctxText(m.context_length || m.max_model_len), price], icons, '');
+    }
+    // Electron Hub
+    price = pi && po ? '$' + pi + '/$' + po + ' in/out Mtoken' : 'Unknown';
+    var md = m.metadata || {};
+    if (md.vision) icons.push(icon('fa-eye', 'Vision'));
+    if (md.reasoning) icons.push(icon('fa-brain', 'Reasoning'));
+    if (md.function_call) icons.push(icon('fa-wrench', 'Tool calling'));
+    if (m.premium_model) icons.push(icon('fa-crown', 'Needs a subscription'));
+    return withExtras([ctxText(m.tokens), price], icons, '');
+  }
+
+  function withExtras(parts, icons, text) {
+    if (icons.length || text) parts.push({ icons: icons, text: text });
+    return parts;
+  }
+
   /** Reads the shown options into [items] once. Plain property reads only: no style or layout. */
   function readItems(select) {
     var opts = select.options, out = [], lastParent = null;
+    var source = MODEL_SOURCES[select.id] || null, byId = null;
+    var list = source && models ? models() : null;
+    if (Array.isArray(list)) {
+      byId = {};
+      for (var k = 0; k < list.length; k++) if (list[k] && list[k].id != null) byId[list[k].id] = list[k];
+    }
+    rich = byId !== null;
     for (var i = 0; i < opts.length; i++) {
       var opt = opts[i], parent = opt.parentNode;
       var group = parent && parent.tagName === 'OPTGROUP' ? parent : null;
       if (isHidden(opt) || (group && isHidden(group))) continue;
       var label = opt.label;
+      var model = byId ? byId[opt.value] : null;
       var item = {
-        index: i, label: label, lower: label.toLowerCase(),
+        index: i, label: label, lower: (rich ? label + ' ' + opt.value : label).toLowerCase(),
+        meta: model ? describeModel(source, model) : null,
         disabled: opt.disabled || !!(group && group.disabled), selected: opt.selected,
         groupBreak: false, groupLabel: '',
       };
@@ -233,7 +348,7 @@
   /** One element of each kind, measured once per open (font and padding follow ST's theme). */
   function measure() {
     var probes = { row: makeEl('row'), group: makeEl('group'), divider: makeEl('divider') };
-    probes.row.textContent = 'Xg';
+    if (rich) fillRich(probes.row, 'Xg', null); else probes.row.textContent = 'Xg';
     probes.group.textContent = 'Xg';
     var h = {};
     for (var k in probes) spacer.appendChild(probes[k]);
@@ -293,10 +408,36 @@
     if (el.__stmItem !== e.item) {
       el.__stmItem = e.item;
       // A blank label still needs its line, or the row would be shorter than its slot.
-      el.textContent = (e.kind === 'group' ? e.item.groupLabel : e.item.label) || '\u00a0';
+      if (e.kind === 'row' && rich) fillRich(el, e.item.label, e.item.meta);
+      else el.textContent = (e.kind === 'group' ? e.item.groupLabel : e.item.label) || '\u00a0';
       if (e.kind === 'row') el.setAttribute('data-index', String(e.item.index));
     }
     if (e.kind === 'row') paintRow(el, e.item);
+  }
+
+  /** A model row: the name, and a line of details (an empty line when ST has none for it). */
+  function fillRich(el, label, meta) {
+    el.textContent = '';
+    var name = document.createElement('span');
+    name.className = 'stm-name';
+    name.textContent = label || '\u00a0';
+    var line = document.createElement('span');
+    line.className = 'stm-meta';
+    if (!meta || meta.length === 0) line.textContent = '\u00a0';
+    for (var i = 0; meta && i < meta.length; i++) {
+      if (i > 0) line.appendChild(document.createTextNode(' \u00b7 '));
+      var part = meta[i];
+      if (typeof part === 'string') { line.appendChild(document.createTextNode(part)); continue; }
+      for (var j = 0; j < part.icons.length; j++) {
+        var ic = document.createElement('i');
+        ic.className = 'fa-solid fa-sm ' + part.icons[j].fa;
+        ic.title = part.icons[j].title;
+        line.appendChild(ic);
+      }
+      if (part.text) line.appendChild(document.createTextNode(part.text));
+    }
+    el.appendChild(name);
+    el.appendChild(line);
   }
 
   /** First entry whose bottom is below [y]. */
@@ -354,6 +495,7 @@
       ensureRoot();
       items = readItems(select);
       if (items.length === 0) return false;
+      if (MODEL_SOURCES[select.id] && !models) loadModels(function () { if (current === select) reread(); });
       var title = titleFor(select);
       titleEl.textContent = title;
       titleEl.hidden = !title;
@@ -405,6 +547,19 @@
       abort();
       return false;
     }
+  }
+
+  /** The open list again, with what is known now (model details that arrived after it opened). */
+  function reread() {
+    try {
+      var at = list.scrollTop;
+      items = readItems(current);
+      clearRendered();
+      heights = measure();
+      buildEntries(search.value.trim().toLowerCase());
+      list.scrollTop = at;
+      render();
+    } catch (e) { /* the list stays as it was */ }
   }
 
   /** A failed open leaves nothing open; the native list takes over. */
@@ -531,6 +686,8 @@
     close();
   }, true);
 
+  window.addEventListener('load', function () { loadModels(null); });
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () { try { injectCss(); } catch (e) { /* sheet still works unstyled */ } });
   } else {
@@ -541,5 +698,7 @@
     open: open,
     close: function () { try { close(); } catch (e) { /* nothing open */ } },
     isOpen: function () { return current !== null; },
+    /** Tests only: where model details come from (a function returning a list, or null). */
+    _setModels: function (fn) { models = fn; },
   };
 })();

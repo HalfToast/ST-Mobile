@@ -1,0 +1,155 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>select-sheet model details tests</title>
+<script src="../../main/assets/web/select-sheet.js"></script>
+</head>
+<body>
+<div id="fixtures">
+  <h4>NanoGPT Model</h4>
+  <select id="model_nanogpt_select">
+    <option value="vendor/alpha">Alpha</option>
+    <option value="vendor/beta">Beta</option>
+    <option value="vendor/free">Free one</option>
+    <option value="vendor/unknown">Not in list</option>
+  </select>
+  <h4>OpenRouter Model</h4>
+  <select id="model_openrouter_select">
+    <option value="or/one">One</option>
+    <option value="or/zero">Zero</option>
+  </select>
+  <h4>Chutes Model</h4>
+  <select id="model_chutes_select"><option value="ch/m">ch/m</option></select>
+  <h4>Electron Hub Model</h4>
+  <select id="model_electronhub_select"><option value="eh/m">EH</option></select>
+  <h4>AI/ML API Model</h4>
+  <select id="model_aimlapi_select"><option value="acme/m">M</option></select>
+  <h4>Something else</h4>
+  <select id="other"><option value="vendor/alpha">Alpha</option><option value="x">X</option></select>
+</div>
+<script>
+(function () {
+  'use strict';
+  window.STMobileSheet = { postMessage: function () {} };
+  var sheetApi = function () { return window.__stmSelectSheet; };
+
+  var MODELS = [
+    {
+      id: 'vendor/alpha', name: 'Alpha', context_length: 128000,
+      pricing: { prompt: 0.154, completion: 0.6 },
+      capabilities: { vision: true, reasoning: true, tool_calling: true },
+      subscription: { included: true, inputTokenMultiplier: 1.5 },
+    },
+    {
+      id: 'vendor/beta', name: 'Beta', context_length: 1048576,
+      pricing: { prompt: 3, completion: 15 },
+      capabilities: {},
+      subscription: { included: false, note: 'PAYG only' },
+    },
+    { id: 'vendor/free', name: 'Free one', context_length: 8192, pricing: { prompt: 0, completion: 0 } },
+    // OpenRouter: per-token USD strings.
+    { id: 'or/one', name: 'One', context_length: 200000, pricing: { prompt: '0.000003', completion: '0.000015' } },
+    { id: 'or/zero', name: 'Zero', context_length: 32768, pricing: { prompt: '0', completion: '0' } },
+    {
+      id: 'ch/m', max_model_len: 65536, pricing: { input: 0.2, output: 0.8 },
+      input_modalities: ['text', 'image'], supported_features: ['reasoning'],
+    },
+    { id: 'eh/m', name: 'EH', tokens: 4096, pricing: { input: 1, output: 2 }, metadata: { function_call: true }, premium_model: true },
+    { id: 'acme/m', name: 'M' },
+  ];
+
+  function down(el) {
+    var ev = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    el.dispatchEvent(ev);
+    return ev.defaultPrevented;
+  }
+  function rows() { return Array.prototype.slice.call(document.querySelectorAll('#stm-select-sheet .stm-row')); }
+  function row(name) {
+    return rows().filter(function (r) { return r.querySelector('.stm-name').textContent === name; })[0];
+  }
+  function meta(name) { return row(name).querySelector('.stm-meta'); }
+  function eq(actual, expected, what) {
+    var a = JSON.stringify(actual), e = JSON.stringify(expected);
+    if (a !== e) throw new Error(what + ': expected ' + e + ', got ' + a);
+  }
+  function ok(cond, what) { if (!cond) throw new Error(what); }
+  function icons(el) {
+    return Array.prototype.map.call(el.querySelectorAll('i'), function (i) { return i.getAttribute('title'); });
+  }
+  function open(id) { ok(down(document.getElementById(id)), id + ' opens as a sheet'); }
+
+  var tests = {
+    nanoGptShowsContextPriceCapabilitiesAndSubscription: function () {
+      open('model_nanogpt_select');
+      eq(meta('Alpha').textContent, '128k ctx · $0.15/$0.6 in/out Mtoken · Sub (1.5x)', 'Alpha');
+      eq(icons(meta('Alpha')), ['Vision', 'Reasoning', 'Tool calling', 'Included in subscription'], 'Alpha icons');
+      eq(meta('Beta').textContent, '1M ctx · $3/$15 in/out Mtoken · Not in Sub', 'Beta');
+      eq(meta('Free one').textContent, '8k ctx · Free', 'free');
+      // An option ST has no details for still gets its (empty) second line, so every row is the same height.
+      eq(meta('Not in list').textContent, ' ', 'unknown');
+    },
+    everyRowIsTheSameTwoLineHeight: function () {
+      open('model_nanogpt_select');
+      var hs = rows().map(function (r) { return r.getBoundingClientRect().height; });
+      ok(hs.every(function (h) { return h === hs[0]; }), 'same heights ' + hs);
+      document.getElementById('stm-select-sheet') && window.__stmSelectSheet.close();
+      open('other');
+      var plain = document.querySelector('#stm-select-sheet .stm-row');
+      ok(plain.getBoundingClientRect().height < hs[0], 'a plain list keeps one-line rows');
+      ok(!plain.querySelector('.stm-meta'), 'no details for other selects');
+    },
+    openRouterShowsTokensPerDollar: function () {
+      open('model_openrouter_select');
+      eq(meta('One').textContent, '200k ctx · 333k t/$', 'priced');
+      eq(meta('Zero').textContent, '33k ctx · Free', 'free');
+    },
+    chutesElectronHubAndAimlapi: function () {
+      open('model_chutes_select');
+      eq(meta('ch/m').textContent, '66k ctx · $0.2/$0.8 in/out Mtoken · ', 'chutes');
+      eq(icons(meta('ch/m')), ['Vision', 'Reasoning'], 'chutes icons');
+      window.__stmSelectSheet.close();
+      open('model_electronhub_select');
+      eq(meta('EH').textContent, '4k ctx · $1/$2 in/out Mtoken · ', 'electron hub');
+      eq(icons(meta('EH')), ['Tool calling', 'Needs a subscription'], 'electron hub icons');
+      window.__stmSelectSheet.close();
+      open('model_aimlapi_select');
+      eq(meta('M').textContent, 'acme', 'aimlapi vendor');
+    },
+    searchFindsTheModelId: function () {
+      open('model_nanogpt_select');
+      var search = document.querySelector('#stm-select-sheet .stm-search');
+      search.value = 'vendor/be';
+      search.dispatchEvent(new Event('input'));
+      eq(rows().map(function (r) { return r.querySelector('.stm-name').textContent; }), ['Beta'], 'match by id');
+    },
+    withoutModelsItIsAPlainList: function () {
+      sheetApi()._setModels(null);
+      open('model_nanogpt_select');
+      ok(!document.querySelector('#stm-select-sheet .stm-meta'), 'no details');
+      eq(document.querySelector('#stm-select-sheet .stm-row').textContent, 'Alpha', 'plain row');
+    },
+  };
+
+  function finish(result) { document.body.dataset.result = result; }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    var names = Object.keys(tests), i = 0;
+    function next() {
+      if (i >= names.length) return finish('PASS');
+      var name = names[i++];
+      sheetApi()._setModels(function () { return MODELS; });
+      Promise.resolve().then(tests[name]).then(function () {
+        sheetApi().close();
+        next();
+      }, function (e) {
+        finish('FAIL: ' + name + ': ' + (e && e.message));
+      });
+    }
+    next();
+  });
+})();
+</script>
+</body>
+</html>
