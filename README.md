@@ -4,6 +4,12 @@ An Android app for using [SillyTavern](https://github.com/SillyTavern/SillyTaver
 shows your SillyTavern page full screen, and adds native screens for looking after the server over SSH.
 It has four screens: Chat, Control Center, Stats and Logs.
 
+**One SillyTavern, every device.** If you run a separate SillyTavern on your phone, you end up setting
+everything up twice: importing the same character cards, rebuilding presets, copying sampler settings and
+API keys, and your chats drift apart between the two. ST Mobile skips all of that. Your phone uses the
+same SillyTavern as your PC, so every card, preset, parameter, lorebook and chat is already there, and a
+chat you start on one device carries on from the other.
+
 SillyTavern can run on any machine the phone can reach: a PC or Mac on the same Wi-Fi, a Linux box at
 home, Windows through WSL, or another Android device with Termux. You can reach it over your home network
 or through a VPN. Chat needs only the server's address. Control Center, Stats and Logs also need SSH
@@ -393,7 +399,9 @@ app), scaled by SillyTavern's font scale. Logs use Noto Sans Mono.
 
 SillyTavern's dropdowns open as a themed bottom sheet instead of Android's plain list. Long lists, such
 as a provider's hundreds of models, open quickly and can be searched; very long option names are cut
-short with "…". The sheet is added to the page on the phone only; nothing changes on the server. If it
+short with "…". Model lists from OpenRouter, NanoGPT, Chutes, Electron Hub and AI/ML API show the same
+details as SillyTavern on a computer under each name: context size, price, capabilities and, for NanoGPT,
+whether the model is in your subscription; search also matches the model ID. The sheet is added to the page on the phone only; nothing changes on the server. If it
 cannot attach, the dropdown falls back to the plain list. SillyTavern's searchable (select2) dropdowns
 are restyled to match.
 
