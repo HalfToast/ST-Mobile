@@ -11,8 +11,8 @@ android {
         applicationId = "dev.halftoast.stmobile"
         minSdk = 29
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 4
+        versionName = "0.2.2"
     }
 
     // Release signing keys live in ~/.gradle/gradle.properties (never in the repo). Without them the
